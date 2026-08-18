@@ -78,12 +78,19 @@ and fleetix keeping only what it implements; this plan replaced.
 *Done when:* `fleetix/docs/contract.md` describes nothing fleetix does not
 implement, and the assignment spec exists in exactly one place.
 
-**P1 · Docket alone.** `entries` + `moves` + the uid map. Eight states per the
-spec. FastAPI / SQLAlchemy 2 async / Alembic, own `docket` schema in the existing
-Postgres — matching wild-life so there is one idiom, not two. Peer-credential auth
-over a unix socket; bearer for everything else. No wild-life, no agents.
+**P1 · Docket alone.** ✅ Done. `entries` + `moves` + `local_identities`, the
+transition table in `states.py`, peer-credential auth over a unix socket, bearer
+for everything else. 17 tests green plus `tests/peercred_check.sh`, which drives
+the loop from uid 40001 presenting no credential at all.
 *Done when:* a full loop runs including a decline, and the entry still reports the
 commitment outstanding afterwards.
+
+One thing the build settled that the spec had left ambiguous: **`return` is a
+move, not a state.** The spec listed it among the states and also said it
+"returns to `accepted`", which cannot both be true. A return does not rest
+anywhere — it puts the work back in the delegate's hands — so its resulting state
+is `accepted` and the log still records that it happened. That is what keeps "we
+went round three times" legible without inventing a state nobody sits in.
 
 **P2 · wild-life writes and reads it.** Widen `AssignmentEvent`
 (`schemas/tasks.py:133`) to the eight states. `record_assignment` keeps writing

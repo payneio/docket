@@ -40,7 +40,20 @@ first-class and people second-class has broken the point of it.
 - **Not agent infrastructure.** Unix accounts for agents are
   [fleetix](../fleetix).
 
+## Run it
+
+```bash
+uv sync
+uv run alembic upgrade head          # creates the `docket` schema
+uv run docket                        # :9006, or DOCKET_UDS=/run/docket.sock
+uv run pytest tests/ -q              # needs the Wild PC Postgres
+./tests/peercred_check.sh            # needs sudo and a fleetix principal
+```
+
+`DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`, `DOCKET_UDS`.
+
 ## Where to start
 
 `docs/plan.md` — the boundary between this, wild-life and fleetix, and the order
-of work. `docs/assignment.md` — the specification this implements.
+of work. `docs/assignment.md` — the specification. `docs/protocol.md` — what a
+client sees. `src/docket/states.py` — the conversation, as a table.
