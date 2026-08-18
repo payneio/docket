@@ -92,7 +92,8 @@ anywhere — it puts the work back in the delegate's hands — so its resulting 
 is `accepted` and the log still records that it happened. That is what keeps "we
 went round three times" legible without inventing a state nobody sits in.
 
-**P2 · wild-life writes and reads it.** Widen `AssignmentEvent`
+**P2 · wild-life writes and reads it.** ✅ Done — see the checkpoint below before
+starting P3. Widen `AssignmentEvent`
 (`schemas/tasks.py:133`) to the eight states. `record_assignment` keeps writing
 the moment via the existing `upsert_moment` / `set_links` and additionally
 creates or advances the docket entry. Task detail reads entry state through a
@@ -159,8 +160,12 @@ short.
 
 The committed plan put the checkpoint at P4, which is too late. Move it earlier:
 
-- **End of P2 — has anything but a test created an entry?** If not, the loop is
-  not being used and nothing after P2 is justified yet.
+- **End of P2 — has anything but a test created an entry?** ⏸ **Due now, and the
+  answer is no.** Zero entries exist that were not created by a test and deleted
+  after. By this plan's own terms P3 is not yet justified: the loop has to be
+  *used* — offer something real to a real person and see whether the register
+  earns its place — before the agents are rewired to it and before four tables
+  are dropped in wild-life.
 - **End of P3 — has a party who is not Paul made a move?** An agent counts. If
   not, docket is a table wild-life could have held, and it should fold back in.
 - **S25 gets expensive.** "Everything with this person" now crosses a service.
