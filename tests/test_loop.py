@@ -1,6 +1,11 @@
 """The conversation, end to end, against a real database."""
 
+from docket.config import settings
 from tests.conftest import AGENT, subject
+
+
+def owner_party() -> str:
+    return settings.owner_party
 
 
 async def _offer(owner, **kw):
@@ -128,3 +133,55 @@ async def test_an_unknown_caller_gets_nothing(owner):
     from tests.conftest import client_as
     async with client_as(4242) as stranger:  # a uid nobody registered
         assert (await stranger.get("/me")).status_code == 401
+
+
+async def test_a_party_may_record_the_other_partys_move(owner):
+    """Someone with no account here cannot act, so the requester writes it down.
+
+    The log keeps both facts apart: whose move it was, and who typed it. Without
+    that, "Sara declined" is either forbidden or filed as Paul's own decline, and
+    both are lies.
+    """
+    subj = subject()
+    sara = "mailto:sara@example.invalid"
+    e = (await owner.post("/entries", json={"subject": subj, "delegate": sara})).json()
+
+    e = (await owner.post(
+        f"/entries/{e['id']}/moves",
+        json={"move": "decline", "on_behalf_of": sara, "note": "said no by email"},
+    )).json()
+    assert e["state"] == "declined"
+
+    decline = e["moves"][-1]
+    assert decline["by"] == sara                    # whose move it was
+    assert decline["recorded_by"] == owner_party()  # who wrote it down
+    assert decline["attested"] is False             # nothing but the writer says so
+
+
+async def test_a_move_a_party_makes_itself_is_attested(owner, agent):
+    e = await _offer(owner)
+    e = (await agent.post(f"/entries/{e['id']}/moves", json={"move": "accept"})).json()
+    accept = e["moves"][-1]
+    assert accept["by"] == accept["recorded_by"] == AGENT
+    assert accept["attested"] is True
+
+
+async def test_a_stranger_cannot_record_moves_for_others(owner, agent):
+    """Recording on someone's behalf is a privilege of being in the conversation."""
+    e = await _offer(owner)
+    from tests.conftest import LocalIdentity, AsyncSessionLocal
+    async with AsyncSessionLocal() as s:
+        s.add(LocalIdentity(uid=999002, party="wild-life:person:22222222-2222-2222-2222-222222222222"))
+        await s.commit()
+    from tests.conftest import client_as
+    try:
+        async with client_as(999002) as stranger:
+            r = await stranger.post(
+                f"/entries/{e['id']}/moves", json={"move": "accept", "on_behalf_of": AGENT}
+            )
+            assert r.status_code == 403
+    finally:
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as s:
+            await s.execute(text("DELETE FROM docket.local_identities WHERE uid = 999002"))
+            await s.commit()

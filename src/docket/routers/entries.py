@@ -50,8 +50,8 @@ async def _next_seq(session: AsyncSession, entry_id: uuid.UUID) -> int:
 
 
 async def _record(
-    session: AsyncSession, entry: Entry, move: str, by: str, before: str | None, after: str,
-    note: str | None,
+    session: AsyncSession, entry: Entry, move: str, *, by: str, identity: Identity,
+    before: str | None, after: str, note: str | None,
 ) -> None:
     session.add(
         Move(
@@ -59,6 +59,10 @@ async def _record(
             seq=await _next_seq(session, entry.id),
             at=datetime.now(timezone.utc),
             by=by,
+            recorded_by=identity.party,
+            # Only a move a party made itself, over a socket the kernel vouched
+            # for, is corroborated by anything other than the writer.
+            attested=identity.attested and by == identity.party,
             move=move,
             from_state=before,
             to_state=after,
@@ -89,7 +93,8 @@ async def offer(
     )
     session.add(entry)
     await session.flush()
-    await _record(session, entry, "offer", identity.party, None, after, payload.note)
+    await _record(session, entry, "offer", by=identity.party, identity=identity,
+                  before=None, after=after, note=payload.note)
     await session.flush()
     await session.refresh(entry)
     return _read(entry, identity.party)
@@ -148,9 +153,22 @@ async def make_move(
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
 
+    # Whose move is this? Normally the caller's. A party may also write down the
+    # other party's move -- somebody with no account here cannot make it
+    # themselves, and "Sara declined" has to be recordable or the register can
+    # only describe people who use it.
+    mover = identity.party
+    if payload.on_behalf_of and payload.on_behalf_of != identity.party:
+        if _role(entry, identity.party) is None:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="only a party to this entry may record the other party's move",
+            )
+        mover = payload.on_behalf_of
+
     before = entry.state
     try:
-        after = states.apply(before, payload.move, _role(entry, identity.party))
+        after = states.apply(before, payload.move, _role(entry, mover))
     except states.Refused as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
 
@@ -162,7 +180,8 @@ async def make_move(
         entry.expected_by = payload.expected_by
 
     entry.state = after
-    await _record(session, entry, payload.move, identity.party, before, after, payload.note)
+    await _record(session, entry, payload.move, by=mover, identity=identity,
+                  before=before, after=after, note=payload.note)
 
     if payload.move == "redirect":
         # The chain: whoever is handing it on becomes the requester of the child,
@@ -173,7 +192,7 @@ async def make_move(
                 subject=entry.subject,
                 subject_label=entry.subject_label,
                 label_as_of=entry.label_as_of,
-                requester=identity.party,
+                requester=mover,
                 delegate=payload.to,
                 accountable=entry.accountable,
                 state="offered",

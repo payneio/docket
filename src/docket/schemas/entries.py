@@ -40,6 +40,9 @@ class OfferCreate(BaseModel):
 class MoveCreate(BaseModel):
     move: str
     note: str | None = None
+    #: Record this as the other party's move. Only a party to the entry may do
+    #: it, and the log keeps who actually typed it — see Move.recorded_by.
+    on_behalf_of: str | None = None
     #: Only for `redirect`: who it is being handed to.
     to: str | None = None
     #: Only for `counter` and a re-`offer`: the revised terms.
@@ -53,7 +56,7 @@ class MoveCreate(BaseModel):
             raise ValueError(f"unknown move {v!r}; expected one of {', '.join(MOVES)}")
         return v
 
-    _v = field_validator("to")(classmethod(lambda cls, v: _ref(v)))
+    _v = field_validator("to", "on_behalf_of")(classmethod(lambda cls, v: _ref(v)))
 
 
 class MoveRead(BaseModel):
@@ -63,6 +66,8 @@ class MoveRead(BaseModel):
     seq: int
     at: datetime
     by: str
+    recorded_by: str
+    attested: bool
     move: str
     from_state: str | None
     to_state: str

@@ -14,7 +14,7 @@ someone else's database.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -81,8 +81,17 @@ class Move(Base, UUIDPrimaryKey):
     #: order, and it is the order they were accepted in.
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    #: Who moved, as a URI.
+    #: Whose move this is, as a URI. The role check uses this.
     by: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    #: Who wrote it down. Usually the same, and different in the case that makes
+    #: this worth separating: a delegate with no account here cannot act, so the
+    #: requester records "Sara declined". Collapsing the two would either forbid
+    #: that or file Sara's decline as Paul's own, and both are lies.
+    recorded_by: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    #: Whether the kernel vouched for the recorder (S47). A move a party made
+    #: over its own socket is evidence; one somebody typed on its behalf is
+    #: testimony. Both belong in the log; only one of them is corroborated.
+    attested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     move: Mapped[str] = mapped_column(Text, nullable=False)
     #: Recorded on the move so the log reads without the transition table beside
     #: it, and so a later change to that table cannot rewrite what happened.
