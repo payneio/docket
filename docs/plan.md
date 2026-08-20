@@ -102,13 +102,13 @@ wild-life proxy route. `AssignmentBar.tsx` grows the new moves.
 *Done when:* an S21 walkthrough passes — three weeks of silence is visible, and a
 decline leaves the task open and owed.
 
-**P3 · Agents speak the loop.** Fleetix agents stop polling `/tasks/mine` and
+**P3 · Agents speak the loop.** ✅ Done. Fleetix agents stop polling `/tasks/mine` and
 claiming; they accept, decline and deliver on entries. `agent/reference.sh` and
 `agent/coder.sh` change; `fleetix/docs/contract.md`'s "what it should listen to"
 becomes what it does listen to.
 *Done when:* an agent declines an offer and the task is still open and still owed.
 
-**P4 · Retire the four tables.** Through `change-the-model`. Drop `requests`,
+**P4 · Retire the four tables.** ✅ Done. Through `change-the-model`. Drop `requests`,
 `commitments`, `delegations`; remove `delegated`/`delivered` from `TaskStatus`;
 drop `assignee_id` (`responsible_id` stays — RACI's R is a property of the
 intention); remove `claimed_by_id`/`claimed_at`, `/claim`, `/release`, and the
@@ -166,8 +166,9 @@ The committed plan put the checkpoint at P4, which is too late. Move it earlier:
   *used* — offer something real to a real person and see whether the register
   earns its place — before the agents are rewired to it and before four tables
   are dropped in wild-life.
-- **End of P3 — has a party who is not Paul made a move?** An agent counts. If
-  not, docket is a table wild-life could have held, and it should fold back in.
+- **End of P3 — has a party who is not Paul made a move?** ✅ Yes. The planner
+  accepted an offer and reported on it from uid 40002, over its own socket, with
+  no credential presented. Both moves are `attested: true`; Paul's offer is not.
 - **S25 gets expensive.** "Everything with this person" now crosses a service.
   Measure it; that is the scenario this design puts at risk.
 - **A person becomes a second-class party.** If the API grows agent-shaped
