@@ -205,3 +205,30 @@ async def make_move(
     await session.flush()
     await session.refresh(entry)
     return _read(entry, identity.party)
+
+
+@router.delete("/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def erase(
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    identity: Identity = Depends(current_identity),
+) -> None:
+    """Remove an entry that should never have existed.
+
+    **This is not how a conversation ends.** Ending one is a move -- settle,
+    decline, withdraw -- and those stay, because the history is the point. This
+    is for an entry created in error, and for tests, which otherwise leave
+    fictions in a live register.
+
+    Owner only, and it takes the moves with it: a move belongs to its entry, and
+    half-deleting would leave a log about a conversation nobody can read.
+    """
+    if identity.via != "bearer":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="a party ends a conversation with a move, not by erasing it",
+        )
+    entry = await session.get(Entry, entry_id)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+    await session.delete(entry)
