@@ -71,6 +71,17 @@ with counter-offer and decline as first-class moves rather than error paths.
 | `withdrawn` | the requester takes it back | ▪ |
 | `redirected` | the delegate passes it on; this assignment ends and a child opens | ▪ |
 
+There is one move with no state of its own. **`update`** says something happened
+without moving the conversation — either party, any state still open. It is not
+in Winograd & Flores and it is here because leaving it out forced a lie: a
+delegate who is stuck but still holding the work had only `decline`, which gives
+it back, or silence, which is the failure S21 exists to make visible. A party
+with something to say and no way to say it is the one case that must not exist.
+
+Its cost is worth stating rather than discovering: staleness is measured from the
+last move, so a party that reports nothing useful every hour looks attentive. **An
+update is evidence that somebody spoke, never that anything progressed.**
+
 ### The rules that make this worth having
 
 1. **No terminal state of an assignment ends its intention.** The intention's own

@@ -8,12 +8,17 @@ DB_SCHEMA = "docket"
 class Settings(BaseSettings):
     """Service settings loaded from environment variables (prefix ``DOCKET_``)."""
 
-    host: str = "0.0.0.0"
+    # Loopback only. Docket is never reached from off this box directly:
+    # wild-life proxies for the browser, and everything local uses the socket.
+    host: str = "127.0.0.1"
     port: int = 9006
-    # When set, listen on this unix socket instead of host:port. A caller on the
-    # same machine is then identified by SO_PEERCRED rather than by a token it
-    # could have obtained anywhere — see auth.py.
+    # Additionally listen here. A caller arriving on the socket is identified by
+    # SO_PEERCRED — by the kernel, rather than by a token it could have obtained
+    # anywhere. Both listeners serve the same app; they differ only in what they
+    # can know about who is calling.
     uds: str = ""
+    #: Group given access to the socket. Fleetix principals are all in `fleet`.
+    uds_group: str = "fleet"
 
     database_url: str = "postgresql+asyncpg://castle:castle@localhost:5432/castle"
 

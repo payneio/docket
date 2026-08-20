@@ -24,7 +24,8 @@ main reason the two are separate services.
 from typing import Literal
 
 Move = Literal[
-    "offer", "counter", "accept", "decline", "withdraw", "deliver", "settle", "return", "redirect"
+    "offer", "counter", "accept", "decline", "withdraw", "deliver", "settle", "return",
+    "redirect", "update",
 ]
 State = Literal[
     "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn", "redirected"
@@ -32,8 +33,22 @@ State = Literal[
 Role = Literal["requester", "delegate"]
 
 MOVES: tuple[str, ...] = (
-    "offer", "counter", "accept", "decline", "withdraw", "deliver", "settle", "return", "redirect",
+    "offer", "counter", "accept", "decline", "withdraw", "deliver", "settle", "return",
+    "redirect", "update",
 )
+
+#: Says something happened without moving the conversation. Either party, any
+#: state that is still open.
+#:
+#: Not in Winograd & Flores, and added because leaving it out forced a lie: an
+#: agent that is stuck but still holding the work had only `decline` (give it
+#: back) or silence. Silence is what S21 asks us to make visible, so a party with
+#: something to say and no way to say it is the one case that must not exist.
+#:
+#: The cost is real and worth stating: staleness is measured from the last move,
+#: so a party that reports nothing useful every hour looks attentive. An update
+#: is evidence that somebody spoke, never that anything progressed.
+STATE_PRESERVING: frozenset[str] = frozenset({"update"})
 STATES: tuple[str, ...] = (
     "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn", "redirected",
 )
@@ -85,6 +100,14 @@ def apply(state: str | None, move: str, role: str | None) -> str:
     """
     if move not in MOVES:
         raise Refused(f"unknown move '{move}'")
+    if move in STATE_PRESERVING:
+        if state is None:
+            raise Refused(f"cannot {move} on a new entry")
+        if state in TERMINAL:
+            raise Refused(f"cannot {move} on a conversation that ended in '{state}'")
+        if role is None:
+            raise Refused(f"only a party may {move}")
+        return state
     try:
         after, allowed = TRANSITIONS[(state, move)]
     except KeyError:
@@ -99,7 +122,12 @@ def apply(state: str | None, move: str, role: str | None) -> str:
 def moves_available(state: str | None, role: str | None) -> list[str]:
     """Every move ``role`` could make right now. Drives a UI without duplicating
     the table above, which is how the two come to disagree."""
-    return sorted(
+    if state is None or role is None:
+        available = set()
+    else:
+        available = set() if state in TERMINAL else set(STATE_PRESERVING)
+    available |= {
         m for (s, m), (_after, allowed) in TRANSITIONS.items()
         if s == state and allowed == role
-    )
+    }
+    return sorted(available)

@@ -55,3 +55,24 @@ def test_available_moves_come_from_the_same_table_the_server_enforces():
         for role in ("requester", "delegate"):
             for move in states.moves_available(state, role):
                 states.apply(state, move, role)  # must not raise
+
+
+def test_an_update_says_something_without_moving_anything():
+    """A party that is stuck but still holding the work had only `decline` or
+    silence. Silence is the failure S21 names, so this had to exist."""
+    for state in ("offered", "countered", "accepted", "delivered"):
+        for role in ("requester", "delegate"):
+            assert states.apply(state, "update", role) == state
+            assert "update" in states.moves_available(state, role)
+
+
+def test_you_cannot_update_a_conversation_that_ended():
+    for state in states.TERMINAL:
+        with pytest.raises(states.Refused):
+            states.apply(state, "update", "delegate")
+        assert "update" not in states.moves_available(state, "delegate")
+
+
+def test_a_stranger_cannot_update_either():
+    with pytest.raises(states.Refused, match="only a party"):
+        states.apply("accepted", "update", None)

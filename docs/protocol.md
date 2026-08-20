@@ -7,50 +7,30 @@ worth protecting.
 
 Specified in `assignment.md`; this is what a client sees.
 
-## What it listens to — today
+## What it listens to
 
-Provisional, and inherited rather than designed:
+An agent reads its own inbox and answers it:
 
 | | |
 |---|---|
-| poll | `GET /tasks/mine`, `GET /requests/inbox` |
-| take | `POST /tasks/{id}/claim` (atomic; 409 if held) |
-| report | `PATCH /tasks/{id}` |
+| who am I | `GET /me` — no credential is presented; the socket answers this |
+| what is open | `GET /entries?party=<me>&open_only=true` |
+| answer it | `POST /entries/{id}/moves` — `accept`, `counter`, `decline`, `redirect` |
+| say where it stands | `POST /entries/{id}/moves` — `update` |
+| hand it back finished | `POST /entries/{id}/moves` — `deliver` |
 
-This is a bespoke work queue. It says who is holding a task and nothing about what
-is owed, so an agent that stops has no way to say "I decline" and no way for the
-obligation to outlive its refusal.
+**It is offered work; it never takes work nobody offered it.** The previous
+arrangement was a queue — an agent read `/tasks/mine`, claimed a row and began.
+On 2026-08-20 that meant an agent started a brief it had never agreed to while
+the register still read `offered`, because *asking* had been recorded as
+*agreeing*. A queue cannot express a refusal, so an agent working from one can
+only ever say yes.
 
-## What it should listen to
-
-**The assignment loop** — specified in
-`/data/repos/wild-life/docs/assignment.md`:
-
-```
-offered → accepted → delivered → settled
-   ├─ countered      └─ returned ─┘
-   ├─ declined
-   ├─ withdrawn
-   └─ redirected
-```
-
-An agent receives an **offer** and accepts, counters, or declines. It performs. It
-**delivers**. The requester **settles**. A decline ends the assignment and never
-the commitment.
-
-Two things follow, and they are the reason this is worth the change:
-
-1. **A human delegate and an agent are in the same conversation.** No live
-   protocol does this — A2A's human-facing states are `input-required` and
-   `auth-required`, where the person is an *interrupt*, not a party.
-2. **Substitutability becomes real.** "Speaks the fleetix contract" is a property
-   of a documented protocol rather than of a shared shell script, so an agent is
-   interchangeable regardless of what is inside it — including one that is a
-   person.
-
-The loop maps outward to iCalendar `VTODO`/iTIP for humans and A2A for agents,
-losing the same three states in both directions (`settled`, `returned`,
-`redirected`), which is the gap named in the README.
+**Delivering is a claim about the world, so the runner checks it.** The agent's
+own runtime saying it finished is not evidence; whether the task actually closed
+is. A run that changes nothing and exits 0 leaves the entry `accepted` and posts
+an `update` saying so — S44's failure is a job that stops working and tells only
+`journalctl`, and a shared register is exactly where that should surface instead.
 
 ## Chains
 
