@@ -27,16 +27,32 @@ ARGS=(--print --mode json --session-id "$SESSION_ID" --session-dir "$WS/.harness
 [ -n "${PI_MODEL:-}" ] && ARGS+=(--model "$PI_MODEL")
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(pi "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(pi "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 [ $RC -ne 0 ] && { failed_result "pi exited $RC"; exit 0; }
 
 # `--mode json` shape is not guaranteed across versions, so take the first thing
 # that looks like a summary and fall back to the raw tail rather than reporting
 # nothing.
-REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null)"
-[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+# JSONL of events. The reply is the text of the last assistant `message_end`,
+# and `agent_end.messages` carries the same thing if the stream was cut short.
+#
+# The first version reached for any `.text` or `.content` it could find, which
+# matched the *prompt echoed back in the user message* -- so the register was
+# posted a slice of its own instructions as the agent's report.
+REPLY="$(printf '%s' "$OUT" | jq -rs '
+  ([.[] | select(.type=="message_end") | .message | select(.role=="assistant")] | last)
+  // ([.[] | select(.type=="agent_end") | .messages[]? | select(.role=="assistant")] | last)
+  | [.content[]? | select(.type=="text") | .text] | join("")' 2>/dev/null)"
+[ -z "$REPLY" ] || [ "$REPLY" = "null" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
 # Three channels, best first. The tool is validated and can refuse a bad call;

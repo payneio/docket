@@ -234,6 +234,18 @@ response_outcome() {  # <final response text>
   [ -n "$line" ] && normalise_outcome "$line" && return 0
   return 1
 }
+
+#: Keep an assistant's raw stdout when HARNESS_DEBUG is set.
+#:
+#: Every wrapper guesses at an undocumented output shape, and when a guess is
+#: wrong the only symptom is a strange note in the register -- by which point the
+#: output that would explain it is gone. This keeps it.
+debug_dump() {  # <workspace> <name> <text>
+  [ -n "${HARNESS_DEBUG:-}" ] || return 0
+  mkdir -p "$1/.harness/raw" 2>/dev/null || return 0
+  printf '%s' "$3" > "$1/.harness/raw/$2"
+  printf 'raw %s kept at %s/.harness/raw/%s\n' "$2" "$1" "$2" >&2
+}
 EOF_src_lib
 }
 
@@ -685,21 +697,39 @@ ARGS=(run --output-format json --mode "${AMPLIFIER_MODE:-single}")
 [ -s "$SESSION_FILE" ] && ARGS+=(--resume "$(cat "$SESSION_FILE")")
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(amplifier "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(amplifier "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting fresh" >&2
   rm -f "$SESSION_FILE"
   OUT="$(amplifier run --output-format json --mode "${AMPLIFIER_MODE:-single}" \
-         "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+         "$(default_prompt "$REQ")")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
-SID="$(printf '%s' "$OUT" | jq -r '.session_id // .session // empty' 2>/dev/null)"
+SID="$(printf '%s' "$OUT" | sed -n '/^[[:space:]]*{/,$p' | jq -r '.session_id // .session // empty' 2>/dev/null)"
 [ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
 
 [ $RC -ne 0 ] && { failed_result "amplifier exited $RC"; exit 0; }
 
-REPLY="$(printf '%s' "$OUT" | jq -r '.response // .result // .content // empty' 2>/dev/null)"
+# Stdout opens with a banner -- "Bundle '...' prepared successfully" -- and the
+# JSON follows it, pretty-printed. So the envelope starts at the first line that
+# begins a JSON object, and anything before it is noise this wrapper is here to
+# absorb. Reading from byte zero got the banner and a parse error, and the raw
+# tail that came of it was posted to the register as the agent's report.
+ENVELOPE="$(printf '%s' "$OUT" | sed -n '/^[[:space:]]*{/,$p')"
+REPLY="$(printf '%s' "$ENVELOPE" | jq -r '.response // .result // .content // empty' 2>/dev/null)"
+STATUS="$(printf '%s' "$ENVELOPE" | jq -r '.status // empty' 2>/dev/null)"
+if [ -n "$STATUS" ] && [ "$STATUS" != "success" ]; then
+  failed_result "amplifier reported $STATUS: $(printf '%s' "$ENVELOPE" | jq -r '.error // empty' | head -c 200)"
+  exit 0
+fi
 [ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
@@ -781,6 +811,7 @@ if [ $RC -ne 0 ] && [ -f "$STATE/ran" ]; then
   OUT="$(amplifier-agent "${RETRY[@]}" --fresh "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 touch "$STATE/ran"
 
 [ $RC -ne 0 ] && { failed_result "amplifier-agent exited $RC"; exit 0; }
@@ -870,14 +901,21 @@ if [ -s "$SESSION_FILE" ]; then
 fi
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(claude "${ARGS[@]}" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(claude "${ARGS[@]}")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting a fresh session" >&2
   rm -f "$SESSION_FILE"
   FRESH=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && break; FRESH+=("$a"); done
-  OUT="$(claude "${FRESH[@]}" 2>&1)"; RC=$?
+  OUT="$(claude "${FRESH[@]}")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 # `--output-format json` is an *array* of events in current versions and was a
 # single object in older ones. Both are handled rather than pinned, because a
@@ -988,20 +1026,31 @@ elif [ -d "$WS/.opencode" ]; then
   ARGS+=(--continue)
 fi
 
-OUT="$(opencode "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(opencode "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "continuing failed ($RC); starting fresh" >&2
   rm -f "$SESSION_FILE"
-  OUT="$(opencode run --dir "$WS" --format json "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+  OUT="$(opencode run --dir "$WS" --format json "$(default_prompt "$REQ")")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 SID="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.sessionID? // .session_id? // .id? // empty)] | first // empty' 2>/dev/null)"
 [ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
 
 [ $RC -ne 0 ] && { failed_result "opencode exited $RC"; exit 0; }
 
-REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.text? // .content? // .result? // empty)] | last // empty' 2>/dev/null)"
+# JSONL of events. The reply is every `text` event's part, in order -- one
+# assistant turn can be split across several. The first version took whatever
+# `.text` or `.content` it found last, which was usually a `tool_use` event, so
+# the register was posted the arguments of a file write as the agent's report.
+REPLY="$(printf '%s' "$OUT" | jq -rs '[.[] | select(.type=="text") | .part.text? // empty] | join("")' 2>/dev/null)"
 [ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
@@ -1051,16 +1100,32 @@ ARGS=(--print --mode json --session-id "$SESSION_ID" --session-dir "$WS/.harness
 [ -n "${PI_MODEL:-}" ] && ARGS+=(--model "$PI_MODEL")
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(pi "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(pi "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 [ $RC -ne 0 ] && { failed_result "pi exited $RC"; exit 0; }
 
 # `--mode json` shape is not guaranteed across versions, so take the first thing
 # that looks like a summary and fall back to the raw tail rather than reporting
 # nothing.
-REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null)"
-[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+# JSONL of events. The reply is the text of the last assistant `message_end`,
+# and `agent_end.messages` carries the same thing if the stream was cut short.
+#
+# The first version reached for any `.text` or `.content` it could find, which
+# matched the *prompt echoed back in the user message* -- so the register was
+# posted a slice of its own instructions as the agent's report.
+REPLY="$(printf '%s' "$OUT" | jq -rs '
+  ([.[] | select(.type=="message_end") | .message | select(.role=="assistant")] | last)
+  // ([.[] | select(.type=="agent_end") | .messages[]? | select(.role=="assistant")] | last)
+  | [.content[]? | select(.type=="text") | .text] | join("")' 2>/dev/null)"
+[ -z "$REPLY" ] || [ "$REPLY" = "null" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
 # Three channels, best first. The tool is validated and can refuse a bad call;

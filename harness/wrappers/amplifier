@@ -29,21 +29,39 @@ ARGS=(run --output-format json --mode "${AMPLIFIER_MODE:-single}")
 [ -s "$SESSION_FILE" ] && ARGS+=(--resume "$(cat "$SESSION_FILE")")
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(amplifier "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(amplifier "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting fresh" >&2
   rm -f "$SESSION_FILE"
   OUT="$(amplifier run --output-format json --mode "${AMPLIFIER_MODE:-single}" \
-         "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+         "$(default_prompt "$REQ")")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
-SID="$(printf '%s' "$OUT" | jq -r '.session_id // .session // empty' 2>/dev/null)"
+SID="$(printf '%s' "$OUT" | sed -n '/^[[:space:]]*{/,$p' | jq -r '.session_id // .session // empty' 2>/dev/null)"
 [ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
 
 [ $RC -ne 0 ] && { failed_result "amplifier exited $RC"; exit 0; }
 
-REPLY="$(printf '%s' "$OUT" | jq -r '.response // .result // .content // empty' 2>/dev/null)"
+# Stdout opens with a banner -- "Bundle '...' prepared successfully" -- and the
+# JSON follows it, pretty-printed. So the envelope starts at the first line that
+# begins a JSON object, and anything before it is noise this wrapper is here to
+# absorb. Reading from byte zero got the banner and a parse error, and the raw
+# tail that came of it was posted to the register as the agent's report.
+ENVELOPE="$(printf '%s' "$OUT" | sed -n '/^[[:space:]]*{/,$p')"
+REPLY="$(printf '%s' "$ENVELOPE" | jq -r '.response // .result // .content // empty' 2>/dev/null)"
+STATUS="$(printf '%s' "$ENVELOPE" | jq -r '.status // empty' 2>/dev/null)"
+if [ -n "$STATUS" ] && [ "$STATUS" != "success" ]; then
+  failed_result "amplifier reported $STATUS: $(printf '%s' "$ENVELOPE" | jq -r '.error // empty' | head -c 200)"
+  exit 0
+fi
 [ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 

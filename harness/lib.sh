@@ -201,3 +201,15 @@ response_outcome() {  # <final response text>
   [ -n "$line" ] && normalise_outcome "$line" && return 0
   return 1
 }
+
+#: Keep an assistant's raw stdout when HARNESS_DEBUG is set.
+#:
+#: Every wrapper guesses at an undocumented output shape, and when a guess is
+#: wrong the only symptom is a strange note in the register -- by which point the
+#: output that would explain it is gone. This keeps it.
+debug_dump() {  # <workspace> <name> <text>
+  [ -n "${HARNESS_DEBUG:-}" ] || return 0
+  mkdir -p "$1/.harness/raw" 2>/dev/null || return 0
+  printf '%s' "$3" > "$1/.harness/raw/$2"
+  printf 'raw %s kept at %s/.harness/raw/%s\n' "$2" "$1" "$2" >&2
+}

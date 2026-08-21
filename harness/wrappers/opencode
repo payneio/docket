@@ -27,20 +27,31 @@ elif [ -d "$WS/.opencode" ]; then
   ARGS+=(--continue)
 fi
 
-OUT="$(opencode "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(opencode "${ARGS[@]}" "$(default_prompt "$REQ")")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "continuing failed ($RC); starting fresh" >&2
   rm -f "$SESSION_FILE"
-  OUT="$(opencode run --dir "$WS" --format json "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+  OUT="$(opencode run --dir "$WS" --format json "$(default_prompt "$REQ")")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 SID="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.sessionID? // .session_id? // .id? // empty)] | first // empty' 2>/dev/null)"
 [ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
 
 [ $RC -ne 0 ] && { failed_result "opencode exited $RC"; exit 0; }
 
-REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.text? // .content? // .result? // empty)] | last // empty' 2>/dev/null)"
+# JSONL of events. The reply is every `text` event's part, in order -- one
+# assistant turn can be split across several. The first version took whatever
+# `.text` or `.content` it found last, which was usually a `tool_use` event, so
+# the register was posted the arguments of a file write as the agent's report.
+REPLY="$(printf '%s' "$OUT" | jq -rs '[.[] | select(.type=="text") | .part.text? // empty] | join("")' 2>/dev/null)"
 [ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
 SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 

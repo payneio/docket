@@ -59,14 +59,21 @@ if [ -s "$SESSION_FILE" ]; then
 fi
 
 cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
-OUT="$(claude "${ARGS[@]}" 2>&1)"; RC=$?
+# stdout only. The tools separate their streams and this used to merge them with
+# `2>&1`, so a diagnostic line landed in the middle of the data: pi prints
+# "Warning: No project session found ... creating a new session" on the first run
+# of a session, which made the whole JSONL stream unparseable and sent a slice of
+# the prompt to the register as the agent's report. Stderr is left to flow to the
+# wrapper's own stderr, which the runner already keeps in the run log.
+OUT="$(claude "${ARGS[@]}")"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting a fresh session" >&2
   rm -f "$SESSION_FILE"
   FRESH=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && break; FRESH+=("$a"); done
-  OUT="$(claude "${FRESH[@]}" 2>&1)"; RC=$?
+  OUT="$(claude "${FRESH[@]}")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 
 # `--output-format json` is an *array* of events in current versions and was a
 # single object in older ones. Both are handled rather than pinned, because a

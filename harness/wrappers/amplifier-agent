@@ -59,6 +59,7 @@ if [ $RC -ne 0 ] && [ -f "$STATE/ran" ]; then
   OUT="$(amplifier-agent "${RETRY[@]}" --fresh "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
 touch "$STATE/ran"
 
 [ $RC -ne 0 ] && { failed_result "amplifier-agent exited $RC"; exit 0; }
