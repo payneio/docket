@@ -199,9 +199,9 @@ async def _record(
             at=datetime.now(UTC),
             by=by,
             recorded_by=identity.party,
-            # Only a move a party made itself, over a socket the kernel vouched
-            # for, is corroborated by anything other than the writer.
-            attested=identity.attested and by == identity.party,
+            # Which credential did it, so that revoking one answers "and what
+            # did it touch". Null when the owner's own token made the move.
+            via_credential=identity.credential_id,
             move=move,
             from_state=before,
             to_state=after,

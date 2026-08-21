@@ -13,7 +13,6 @@ a long-lived development database can never tell you.
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
 
 import psycopg
 import pytest
@@ -26,7 +25,7 @@ from sqlalchemy import text
 from docket.config import DB_SCHEMA, settings
 from docket.db.session import AsyncSessionLocal
 from docket.main import app
-from docket.models.identities import LocalIdentity
+from docket.models.credentials import Credential, digest, mint
 from tests import _ROOT, PRODUCTION_DATABASE_URL, TEST_DATABASE_URL
 
 MARK = "test:mark"
@@ -34,10 +33,9 @@ MARK = "test:mark"
 PAUL = settings.owner_party
 SARA = "mailto:sara@example.invalid"
 AGENT = "wild-life:person:11111111-1111-1111-1111-111111111111"
-AGENT_UID = 999001  # not a real account; only this suite registers it
 
 #: Tables in dependency order, for the truncate between tests.
-_TABLES = ("moves", "entries", "local_identities", "credentials")
+_TABLES = ("moves", "entries", "credentials", "enrolments")
 
 
 def subject() -> str:
@@ -105,22 +103,28 @@ def _test_database() -> Iterator[None]:
     _drop_schema()
 
 
-def client_as(party_uid: int | None = None) -> AsyncClient:
-    """A client acting as the owner (bearer), or as a registered uid.
+def client_as(token: str | None = None) -> AsyncClient:
+    """A client presenting a token. Defaults to the owner's.
 
-    Passing `client=("uid", n)` puts the same value in the ASGI scope that
-    `peercred.PeerCredProtocol` puts there from a real socket, so this exercises
-    the identity path rather than stubbing past it. That the kernel actually
-    reports the uid is checked separately, in tests/peercred_check.sh.
+    Pass `token=""` for a caller presenting nothing at all — a browser before it
+    has signed in, or anybody who should be turned away.
     """
-    kwargs: dict[str, Any] = {}
-    if party_uid is not None:
-        kwargs["client"] = ("uid", party_uid)
+    presented = settings.token if token is None else token
     return AsyncClient(
-        transport=ASGITransport(app=app, **kwargs),
+        transport=ASGITransport(app=app),
         base_url="http://docket",
-        headers={} if party_uid is not None else {"Authorization": f"Bearer {settings.token}"},
+        headers={"Authorization": f"Bearer {presented}"} if presented else {},
     )
+
+
+async def issue(party: str, label: str | None = None) -> str:
+    """A credential for `party`, straight into the table. The API path for this
+    is exercised in test_credentials; everywhere else just needs the token."""
+    token = mint()
+    async with AsyncSessionLocal() as s:
+        s.add(Credential(party=party, label=label, token_hash=digest(token)))
+        await s.commit()
+    return token
 
 
 @pytest_asyncio.fixture
@@ -131,15 +135,8 @@ async def owner(_cleanup) -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture
 async def agent(_cleanup) -> AsyncIterator[AsyncClient]:
-    """A second party, identified the way a fleetix principal would be."""
-    async with AsyncSessionLocal() as s:
-        row = await s.get(LocalIdentity, AGENT_UID)
-        if row is None:
-            s.add(LocalIdentity(uid=AGENT_UID, party=AGENT, label="test agent"))
-        else:
-            row.party, row.revoked_at = AGENT, None
-        await s.commit()
-    async with client_as(AGENT_UID) as c:
+    """A second party, holding a credential of its own."""
+    async with client_as(await issue(AGENT, "test agent")) as c:
         yield c
 
 

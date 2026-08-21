@@ -23,10 +23,8 @@ async def _issue(owner, party=SARA, label="sara laptop"):
 
 
 def _holder(token: str):
-    """A caller with no unix account and no peer credentials: the whole point."""
-    c = client_as()
-    c.headers["Authorization"] = f"Bearer {token}"
-    return c
+    """A caller with nothing but a token: the whole point."""
+    return client_as(token)
 
 
 async def test_a_credential_acts_as_its_party_and_not_as_the_owner(owner):
@@ -35,18 +33,18 @@ async def test_a_credential_acts_as_its_party_and_not_as_the_owner(owner):
         me = (await sara.get("/me")).json()
     assert me["party"] == SARA
     assert me["via"] == "bearer"
-    # Possession of a secret is not presence of a party. Only the kernel is
-    # evidence, and a token holder is never on this machine by definition.
-    assert me["attested"] is False
+    assert me["owner"] is False
+    # And the log can point back at exactly this credential.
+    assert me["credential"] == made["id"]
 
 
 async def test_a_credential_is_not_the_owner(owner):
     """The regression this whole change turns on.
 
-    `is_operator` used to be `via != "peercred"`, which was true of both cases
-    that existed. A credential arrives in the same header the owner's token does,
-    so it would have inherited reading the whole register, issuing more
-    credentials, and erasing entries.
+    `is_operator` was once `via != "peercred"`, which was true of both cases that
+    existed. A credential arrives in the same header the owner's token does, so
+    it would have inherited reading the whole register, issuing more credentials,
+    and erasing entries.
     """
     made = await _issue(owner)
     private = await owner.post(
@@ -61,9 +59,6 @@ async def test_a_credential_is_not_the_owner(owner):
         # Issues nothing.
         assert (await sara.post("/credentials", json={"party": SARA})).status_code == 403
         assert (await sara.get("/credentials")).status_code == 403
-        # Registers no principals.
-        registering = await sara.put("/identities/4242", json={"uid": 4242, "party": SARA})
-        assert registering.status_code == 403
         # Erases nothing.
         assert (await sara.delete(f"/entries/{private['id']}")).status_code == 403
 
@@ -88,7 +83,7 @@ async def test_a_credential_holder_is_a_full_party_to_its_own_entries(owner):
     assert e["state"] == "settled"
     accept = next(m for m in e["moves"] if m["move"] == "accept")
     assert accept["by"] == accept["recorded_by"] == SARA
-    assert accept["attested"] is False  # a token, not the kernel
+    assert accept["via_credential"] == made["id"]
 
 
 async def test_the_token_is_shown_once_and_only_the_hash_is_kept(owner):
@@ -134,17 +129,6 @@ async def test_a_made_up_token_is_nobody(owner):
         assert (await blank.get("/me")).status_code == 401
 
 
-async def test_the_kernel_still_beats_a_token(owner, agent):
-    """Precedence is unchanged: evidence beats assertion. A registered uid
-    presenting somebody else's credential is still the uid."""
-    made = await _issue(owner)
-    c = client_as(999001)  # the AGENT fixture's uid
-    c.headers["Authorization"] = f"Bearer {made['token']}"
-    async with c as confused:
-        me = (await confused.get("/me")).json()
-    assert me["party"] == AGENT and me["via"] == "peercred" and me["attested"] is True
-
-
 async def test_a_credential_needs_a_party_that_looks_like_one(owner):
     r = await owner.post("/credentials", json={"party": "sara"})
     assert r.status_code == 422
@@ -168,9 +152,7 @@ async def test_the_board_signs_in_any_party_not_only_the_owner(owner):
         "subject": subject(), "delegate": SARA, "terms": "Reviewing the draft for Sara",
     })).json()
 
-    browser = client_as()
-    browser.headers.pop("Authorization", None)
-    async with browser as b:
+    async with client_as("") as b:
         assert (await b.post("/board/sign-in", data={"token": made["token"]})).status_code == 303
         page = (await b.get("/board")).text
 
@@ -186,9 +168,7 @@ async def test_the_board_signs_in_any_party_not_only_the_owner(owner):
 
 
 async def test_the_board_refuses_a_token_that_names_nobody(owner):
-    browser = client_as()
-    browser.headers.pop("Authorization", None)
-    async with browser as b:
+    async with client_as("") as b:
         r = await b.post("/board/sign-in", data={"token": "dk_nonsense"})
         assert r.status_code == 401 and "does not name a party" in r.text
 

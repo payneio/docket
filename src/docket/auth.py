@@ -1,30 +1,30 @@
 """Who is calling.
 
-Three ways of arriving, and their precedence is the point:
+One question, and one kind of answer: a token, presented in an ``Authorization:
+Bearer`` header or carried in a cookie for the board. It is one of two things.
 
-1. **Peer credentials.** The caller came over the unix socket and the kernel
-   reported its uid (see ``peercred.py``). If that uid is registered, it is
-   authoritative and **no presented secret can override it** — evidence beats
-   assertion. An unregistered uid falls through, because "I do not know this
-   account" is not the same as "this caller is lying".
-2. **A token in an ``Authorization: Bearer`` header**, for everything that is not
-   on this machine, and for wild-life's API proxying on behalf of the browser.
-3. **The same kind of token in a cookie**, for the board. A browser cannot
-   present peer credentials and will not attach an Authorization header to a
-   form post, so the token travels in a cookie instead. It is not signed and does
-   not need to be: the cookie *is* the credential in a different envelope, and
-   signing it would only obscure that.
+The **owner's** ``DOCKET_TOKEN`` acts as the register's owner and reads past the
+parties on an entry. It is the credential that issues every other credential,
+which is why it is configuration rather than a row: something has to be able to
+mint the first one.
 
-A presented token is one of two things. The **owner's** ``DOCKET_TOKEN`` acts as
-the register's owner and reads past the parties on an entry; it is the credential
-that issues the others, which is why it is configuration and not a row. Anything
-else is looked up in ``credentials`` and acts as **exactly one party and nothing
-more**.
+Anything else is looked up in ``credentials`` and acts as **exactly one party and
+nothing more** — it cannot issue credentials, cannot erase, and cannot see a
+conversation it is not named on.
 
-Being the owner is a *field* on ``Identity`` and not something derived from how
-the caller arrived. It used to be `via != "peercred"`, which was true of the only
-two cases that existed and would have quietly promoted every credential added
-afterwards to reading the whole register.
+Being the owner is a *field* on ``Identity``, never inferred from how the caller
+arrived. It was once ``via != "peercred"``, which was true of both cases that
+existed and would have quietly promoted every credential added afterwards.
+
+**On what was here before.** Docket used to identify local callers by ``uid``
+over a unix socket, with the kernel vouching via ``SO_PEERCRED`` and no
+credential presented at all. It was the better answer where it applied — nothing
+to store, leak or rotate — and it applied to three processes on one machine,
+required unix accounts to exist, and decided nothing: no rule ever consulted the
+``attested`` flag it produced. Credentials do everything it did and work from
+anywhere, so it went. What it was protecting against is real and now costs
+something: a leaked credential works from any host that can reach the register,
+where a stolen uid worked only while you were on that box being that user.
 """
 
 import hmac
@@ -39,7 +39,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from docket.config import settings
 from docket.db.session import get_session
 from docket.models.credentials import Credential, digest
-from docket.models.identities import LocalIdentity
 
 #: Where the board keeps its token. HttpOnly and SameSite=Strict, so no script
 #: reads it and no other site posts a move with it.
@@ -55,31 +54,11 @@ class Identity:
     """The party a request acts as, and how we know."""
 
     party: str
-    via: str  # "peercred" | "bearer" | "cookie" -- how it arrived, not who it is
-    uid: int | None = None
+    via: str  # "bearer" | "cookie" -- how it arrived, not who it is
     credential_id: uuid.UUID | None = None
     #: Reads past the two parties named on an entry. The register's owner, and
     #: nothing else. Explicit rather than derived — see the module note.
     is_operator: bool = False
-
-    @property
-    def attested(self) -> bool:
-        """True when the kernel vouched for this, rather than the caller.
-
-        A token is a claim: whoever holds it says they are this party, and they
-        are probably right. Only ``SO_PEERCRED`` is evidence, and only on this
-        machine. A credential is deliberately *not* attested however carefully it
-        was issued, because what it proves is possession of a secret and not
-        presence of a party.
-        """
-        return self.via == "peercred"
-
-
-def _peer_uid(request: Request) -> int | None:
-    client = request.scope.get("client")
-    if isinstance(client, (tuple, list)) and len(client) == 2 and client[0] == "uid":
-        return int(client[1])
-    return None
 
 
 def _constant_time_eq(given: str, expected: str) -> bool:
@@ -116,18 +95,6 @@ async def resolve_identity(request: Request, session: AsyncSession) -> Identity 
     The board needs to be able to ask without being refused: an unauthenticated
     browser should meet a sign-in page, not a 401 with a JSON body in it.
     """
-    uid = _peer_uid(request)
-    if uid is not None:
-        row = (
-            await session.execute(
-                select(LocalIdentity).where(
-                    LocalIdentity.uid == uid, LocalIdentity.revoked_at.is_(None)
-                )
-            )
-        ).scalar_one_or_none()
-        if row is not None:
-            return Identity(party=row.party, via="peercred", uid=uid)
-
     scheme, _, value = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() == "bearer" and value:
         found = await identify_token(session, value, "bearer")
@@ -146,15 +113,14 @@ async def current_identity(
     identity = await resolve_identity(request, session)
     if identity is None:
         raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            detail="No identity: unregistered uid, and no valid token",
+            status.HTTP_401_UNAUTHORIZED, detail="No identity: no valid token"
         )
     return identity
 
 
 def owner_only(identity: Identity) -> None:
-    """Guard for the things only the register's owner does: issuing credentials,
-    registering principals, erasing an entry that should never have existed.
+    """Guard for the things only the register's owner does: issuing credentials
+    and enrolment keys, erasing an entry that should never have existed.
 
     Takes the flag, never the carrier. Checking ``via == "bearer"`` was the same
     thing when the owner's token was the only token there was; it stopped being
@@ -162,6 +128,5 @@ def owner_only(identity: Identity) -> None:
     """
     if not identity.is_operator:
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail="only the register's owner may do this",
+            status.HTTP_403_FORBIDDEN, detail="only the register's owner may do this"
         )

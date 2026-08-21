@@ -47,16 +47,18 @@
     <td>{{ m.at.strftime('%d %b %H:%M') }}</td>
     <td class="move">{{ m.move }}</td>
     <td>{{ names[m.by] }}</td>
-    <td>{% if m.attested %}attested{% elif m.recorded_by != m.by %}written down by {{ names[m.recorded_by] }}{% else %}unattested{% endif %}</td>
+    <td>{% if m.recorded_by != m.by %}written down by {{ names[m.recorded_by] }}{% endif %}</td>
     <td class="note">{{ m.note or '' }}</td>
   </tr>
   {% endfor %}
 </table>
 
 <p class="note">
-  <em>Attested</em> means the kernel vouched for the party that made the move —
-  it arrived over its own socket presenting no credential at all. Anything else
-  is testimony: true, probably, and corroborated by nobody but whoever typed it.
+  Every move here is testimony. Whoever made it held a credential that names
+  them, which is a claim and not a proof, and the register records which
+  credential rather than pretending to more. <em>Written down by</em> marks the
+  case worth telling apart: a party with no way to act here, whose move somebody
+  else recorded on their behalf.
 </p>
 <p class="note"><a href="/board">&larr; back</a></p>
 {% endblock %}

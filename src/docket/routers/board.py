@@ -31,7 +31,6 @@ from docket.config import TEMPLATES_DIR
 from docket.db.session import get_session
 from docket.models.credentials import Credential
 from docket.models.entries import Entry
-from docket.models.identities import LocalIdentity
 from docket.schemas.entries import EntryRead, MoveCreate
 
 router = APIRouter(tags=["board"])
@@ -109,24 +108,17 @@ class _Names(dict):
 async def _names(session: AsyncSession, me: str) -> _Names:
     """Whatever we have been told a party is called.
 
-    Both tables, because both name parties and neither is authoritative: a unix
-    principal has a label from `local_identities`, an assistant on another
-    machine has one from the credential it was issued, and a party with neither
-    keeps its URI. None of this makes docket a party registry — a label is a
-    convenience for reading a page, not a fact about anybody.
+    From the labels on live credentials, and nothing else. A party with no
+    credential keeps its URI, which is correct: docket is not a party registry
+    and a label is a convenience for reading a page, not a fact about anybody.
     """
     names = _Names()
-    principals = (await session.execute(
-        select(LocalIdentity.party, LocalIdentity.label).where(
-            LocalIdentity.label.isnot(None), LocalIdentity.revoked_at.is_(None)
-        )
-    )).all()
-    holders = (await session.execute(
+    rows = (await session.execute(
         select(Credential.party, Credential.label).where(
             Credential.label.isnot(None), Credential.revoked_at.is_(None)
         )
     )).all()
-    for party, label in [*principals, *holders]:
+    for party, label in rows:
         names[party] = label
     names[me] = "you"
     return names

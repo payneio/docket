@@ -9,11 +9,9 @@ should not require a box it happens to be running on today.
 principal cannot register its own uid: a credential the holder minted proves
 nothing about who they are.
 
-**A credential is possession, not presence.** Moves made with one are recorded
-``attested: false``, however carefully it was issued. Only the kernel vouching
-for a caller over the unix socket is evidence; a token says somebody holds a
-secret, and the register keeps those two facts apart everywhere else, so it keeps
-them apart here.
+**A credential is possession, not presence**, and the register does not pretend
+otherwise. What it records is which credential made each move, so revoking one
+answers the question that gets asked in anger: and what did it touch.
 """
 
 import uuid

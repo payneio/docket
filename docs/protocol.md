@@ -5,6 +5,12 @@ The wire an agent speaks to take on work and report what became of it. A
 calendar. **The protocol does not distinguish them**, and that is the property
 worth protecting.
 
+An agent gets in by holding a credential, which it may be given or may enrol for
+with a single-use ticket (`POST /enrol`). Nothing about how it arrived makes it a
+lesser party — the register once identified local callers by unix uid and does
+not any more, precisely because that made a party's standing depend on where it
+was running.
+
 Specified in `assignment.md`; this is what a client sees.
 
 ## What it listens to
@@ -13,7 +19,7 @@ An agent reads its own inbox and answers it:
 
 | | |
 |---|---|
-| who am I | `GET /me` — no credential is presented; the socket answers this |
+| who am I | `GET /me` — answered from the credential presented |
 | what is open | `GET /entries?party=<me>&open_only=true` |
 | answer it | `POST /entries/{id}/moves` — `accept`, `counter`, `decline`, `redirect` |
 | say where it stands | `POST /entries/{id}/moves` — `update` |

@@ -55,38 +55,41 @@ open http://localhost:9006/          # the board; it asks for DOCKET_TOKEN once
 
 ## How a party gets in
 
-Three ways, and they differ only in what the register can *know* about who is
-calling. Nothing here requires [fleetix](../fleetix), and nothing requires the
-caller to be on this machine.
+One way: a token. Nothing requires [fleetix](../fleetix), a unix account, or the
+caller being on this machine.
 
-| | who vouches | `attested` |
+| | what it is | what it can do |
 |---|---|---|
-| **unix socket** — a local account registered in `local_identities` | the kernel, via `SO_PEERCRED`; no credential is presented at all | `true` |
-| **a credential** — `Authorization: Bearer dk_…`, from anywhere | nobody; the holder says so | `false` |
-| **`DOCKET_TOKEN`** — the register's owner | nobody, and it is the only identity that reads past the parties on an entry | `false` |
-
-A credential names exactly one party and does nothing else: it cannot issue more,
-cannot register principals, cannot erase, and cannot see a conversation it is not
-named on. Issue one with:
+| **`DOCKET_TOKEN`** | the register's owner, in configuration rather than a row, because something has to mint the first credential | everything, including reading past the parties on an entry |
+| **a credential** — `dk_…` | a secret that names one party | act as that party, and see only what names it |
+| **a ticket** — `dke_…` | short-lived, usually single-use, spendable for a credential | exactly one thing: `POST /enrol` |
 
 ```bash
-curl -X POST https://docket.example/credentials -H "Authorization: Bearer $DOCKET_TOKEN" \
-     -H 'Content-Type: application/json' \
-     -d '{"party":"wild-life:person:<uuid>","label":"laptop assistant"}'
+# The owner writes a ticket saying who the newcomer will be.
+curl -X POST $D/enrolments -H "Authorization: Bearer $DOCKET_TOKEN" \
+     -d '{"party":"wild-life:person:<uuid>","label":"coder","expires_in_hours":1}'
+
+# The newcomer spends it, and keeps what comes back.
+curl -X POST $D/enrol -H "Authorization: Bearer dke_…" -d '{"label":"coder on wildpc"}'
+# → {"credential_id":"…","party":"wild-life:person:<uuid>","token":"dk_…"}
 ```
 
-The token comes back **once** — only its hash is stored, so a lost credential is
-replaced, never recovered. `GET /credentials` lists them with `last_used_at`,
-which answers the one question worth asking before revoking something.
+**The party is on the ticket, never chosen by the enroller.** A ticket whose
+holder could name its own party would be the owner's token with extra steps. An
+agent proves it was *sent*, which is all a machine can prove about itself; who it
+is stays something somebody decided.
 
-**A credential is possession, not presence**, which is why its moves are never
-attested. A token proves somebody holds a secret; only the kernel, on this
-machine, proves a party was there. The register keeps testimony and evidence
-apart everywhere else and does not stop here.
+Secrets are shown once and stored as a SHA-256 — not argon2, because 256 bits
+from the system's random source has nothing to slow down. Revoked, never deleted:
+`moves.via_credential` points back, so revoking one answers what it touched.
 
-Tests use a database of their own (`docket_test`, or `DOCKET_TEST_DATABASE_URL`)
-and refuse to start against the register, so they are safe to run on a live box
-with the service up.
+Docket used to identify local callers by unix uid over a socket, with the kernel
+vouching and no credential presented at all. That was the better answer where it
+applied, and it applied to three processes on one machine, needed accounts to
+exist, and decided nothing — no rule ever read the `attested` flag it set. It is
+gone, and what it protected against is real and now costs something: **a leaked
+credential works from anywhere that can reach the register**, where a stolen uid
+worked only while you were on that box being that user.
 
 ## The board
 

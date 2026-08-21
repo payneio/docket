@@ -14,7 +14,7 @@ someone else's database.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -103,10 +103,21 @@ class Move(Base, UUIDPrimaryKey):
     #: requester records "Sara declined". Collapsing the two would either forbid
     #: that or file Sara's decline as Paul's own, and both are lies.
     recorded_by: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    #: Whether the kernel vouched for the recorder (S47). A move a party made
-    #: over its own socket is evidence; one somebody typed on its behalf is
-    #: testimony. Both belong in the log; only one of them is corroborated.
-    attested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    #: Which credential made this, when one did. Null for the owner's own token.
+    #:
+    #: This is what is left of `attested`, and it is the half that was doing any
+    #: work. That flag recorded whether the kernel had vouched for the caller,
+    #: which mattered while a caller could arrive over a unix socket and nothing
+    #: could forge a uid. Nothing branched on it even then, and once peer
+    #: credentials went it could only ever have been false -- a constant column is
+    #: worse than no column.
+    #:
+    #: What survives is the question the flag was gesturing at: *how* was this
+    #: move authenticated, not just who made it. And this form answers the one
+    #: that gets asked in anger -- a credential has leaked, what did it touch.
+    via_credential: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("credentials.id", ondelete="SET NULL"), index=True
+    )
     move: Mapped[str] = mapped_column(Text, nullable=False)
     #: Recorded on the move so the log reads without the transition table beside
     #: it, and so a later change to that table cannot rewrite what happened.

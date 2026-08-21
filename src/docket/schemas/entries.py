@@ -71,7 +71,7 @@ class MoveRead(BaseModel):
     at: datetime
     by: str
     recorded_by: str
-    attested: bool
+    via_credential: uuid.UUID | None
     move: str
     from_state: str | None
     to_state: str

@@ -20,6 +20,10 @@ async def health(session: AsyncSession = Depends(get_session)) -> dict:
 
 @router.get("/me")
 async def me(identity: Identity = Depends(current_identity)) -> dict:
-    """Who docket thinks you are, and whether anything but you says so."""
-    return {"party": identity.party, "via": identity.via, "uid": identity.uid,
-            "attested": identity.attested}
+    """Who docket thinks you are, and on the strength of which credential."""
+    return {
+        "party": identity.party,
+        "via": identity.via,
+        "credential": str(identity.credential_id) if identity.credential_id else None,
+        "owner": identity.is_operator,
+    }

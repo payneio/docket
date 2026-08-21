@@ -190,6 +190,27 @@ over loopback, because a `Secure` cookie on the loopback path is never sent back
 *Done when:* a party that exists only as a token runs the whole loop from off-box
 and its moves are attributed to it and marked unattested. They are.
 
+**P11 · One way in.** ✅ Done. Peer credentials removed. They were the better
+answer where they applied — nothing to store, leak or rotate — and they applied
+to three processes on one machine, required unix accounts, and **decided
+nothing**: no rule ever consulted the `attested` flag they produced. `local_identities`,
+the socket listener, `peercred.py` and `attested` are gone;
+`moves.via_credential` replaces the flag with the half that does work, so
+revoking a credential answers what it touched.
+
+Agents enrol themselves. The owner writes a ticket naming a party; the agent
+spends it for a credential it keeps. What sits in provisioning is a secret that
+expires, and the long-lived one is minted at the far end and never travels. A
+ticket is a separate table from a credential rather than a flag on one, so an
+enrolment key structurally cannot be presented as a party.
+
+*The cost, stated rather than discovered:* a leaked credential works from
+anywhere that can reach the register, where a stolen uid worked only while you
+were on that box being that user. mTLS was considered and declined — Caddy
+terminates TLS, so docket would need client certs forwarded, a CA, renewal and
+revocation, and the only thing it buys over an enrolment-minted token is that the
+secret never transits. Revisit if agents span networks docket does not trust.
+
 **P5 · The wire.** A2A Agent Card and task lifecycle out; iTIP `VTODO` out,
 reusing the iMIP plumbing in `api/src/wild_life/mail/`. Two prerequisites belong
 with it: `external_ref` is not unique, so a retried inbound `REQUEST` opens a

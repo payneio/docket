@@ -20,13 +20,12 @@ async def _offer(owner, **kw):
 
 
 def _browser():
-    """A browser: no bearer header, no peer credentials, nothing but cookies."""
-    return client_as(party_uid=None)
+    """A browser: no header, nothing but cookies."""
+    return client_as("")
 
 
 async def test_a_browser_with_no_token_meets_a_sign_in_page(owner):
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         r = await b.get("/board")
         assert r.status_code == 401
         assert "sign in" in r.text.lower()
@@ -35,7 +34,6 @@ async def test_a_browser_with_no_token_meets_a_sign_in_page(owner):
 
 async def test_the_wrong_token_is_refused_and_the_right_one_is_not(owner):
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         assert (await b.post("/board/sign-in", data={"token": "nope"})).status_code == 401
 
         r = await b.post("/board/sign-in", data={"token": settings.token})
@@ -52,7 +50,6 @@ async def test_the_board_shows_what_is_waiting_on_you(owner, agent):
     await agent.post(f"/entries/{mine['id']}/moves", json={"move": "counter", "terms": "later?"})
 
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         await b.post("/board/sign-in", data={"token": settings.token})
         page = (await b.get("/board")).text
 
@@ -72,7 +69,6 @@ async def test_a_move_from_the_board_is_the_same_move(owner, agent):
     await agent.post(f"/entries/{e['id']}/moves", json={"move": "deliver"})
 
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         await b.post("/board/sign-in", data={"token": settings.token})
         r = await b.post(f"/board/entries/{e['id']}/moves",
                          data={"move": "settle", "note": "thanks"})
@@ -82,8 +78,8 @@ async def test_a_move_from_the_board_is_the_same_move(owner, agent):
     assert got["state"] == "settled"
     last = got["moves"][-1]
     assert last["move"] == "settle" and last["note"] == "thanks"
-    # Typed by a person at a browser, not vouched for by anything.
-    assert last["attested"] is False
+    # The owner's own token is configuration, not a row, so it names no credential.
+    assert last["via_credential"] is None
 
 
 async def test_a_refused_move_comes_back_to_the_page_with_the_reason(owner, agent):
@@ -91,7 +87,6 @@ async def test_a_refused_move_comes_back_to_the_page_with_the_reason(owner, agen
     is to show what it says now, not an error document."""
     e = await _offer(owner)
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         await b.post("/board/sign-in", data={"token": settings.token})
         r = await b.post(f"/board/entries/{e['id']}/moves", data={"move": "settle"})
         assert r.status_code == 303
@@ -99,33 +94,27 @@ async def test_a_refused_move_comes_back_to_the_page_with_the_reason(owner, agen
         assert "cannot settle from 'offered'" in unquote(r.headers["location"])
 
 
-async def test_the_log_says_which_moves_anything_vouched_for(owner, agent):
+async def test_the_log_reads_without_the_transition_table_beside_it(owner, agent):
     e = await _offer(owner)
     await agent.post(f"/entries/{e['id']}/moves", json={"move": "accept", "note": "picked it up"})
 
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         await b.post("/board/sign-in", data={"token": settings.token})
         page = (await b.get(f"/board/entries/{e['id']}")).text
 
     assert "picked it up" in page
-    assert "attested" in page          # the agent's accept, over its own socket
-    assert "unattested" in page        # the owner's offer, over a token
-    assert "test agent" in page        # the local identity's label, not its URI
+    assert "test agent" in page        # the credential's label, not its URI
+    assert "Every move here is testimony" in page
 
 
 async def test_the_board_never_shows_a_conversation_you_are_not_in(owner, agent):
     """The board authenticates as the owner, so this is really a check that it
     goes through the same scoping the API does rather than round it."""
-    e = await _offer(owner)
-    from tests.conftest import AsyncSessionLocal, LocalIdentity
+    from tests.conftest import issue
 
-    async with AsyncSessionLocal() as s:
-        s.add(LocalIdentity(
-            uid=999005, party="wild-life:person:55555555-5555-5555-5555-555555555555",
-        ))
-        await s.commit()
-    async with client_as(999005) as stranger:
+    e = await _offer(owner)
+    outsider = await issue("wild-life:person:55555555-5555-5555-5555-555555555555")
+    async with client_as(outsider) as stranger:
         assert (await stranger.get(f"/board/entries/{e['id']}")).status_code == 404
         assert e["id"] not in (await stranger.get("/board")).text
 
@@ -134,7 +123,6 @@ async def test_an_ended_conversation_says_the_commitment_is_not(owner, agent):
     e = await _offer(owner)
     await agent.post(f"/entries/{e['id']}/moves", json={"move": "decline"})
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         await b.post("/board/sign-in", data={"token": settings.token})
         page = (await b.get(f"/board/entries/{e['id']}")).text
     assert "The commitment has not" in page
@@ -142,7 +130,6 @@ async def test_an_ended_conversation_says_the_commitment_is_not(owner, agent):
 
 async def test_the_favicon_is_served_and_linked(owner):
     async with _browser() as b:
-        b.headers.pop("Authorization", None)
         r = await b.get("/favicon.svg")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("image/svg+xml")
