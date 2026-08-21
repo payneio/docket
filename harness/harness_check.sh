@@ -93,7 +93,8 @@ unset HARNESS_VERIFIER
 
 echo "== the assistant is told how to declare an outcome"
 [ -f "$WS/AGENTS.md" ] && [ -f "$WS/CLAUDE.md" ] && ok "instructions in the workspace" || bad "no AGENTS.md in $WS"
-grep -q "outcome.json" "$WS/AGENTS.md" && ok "and they say to write outcome.json" || bad "instructions say nothing about it"
+grep -q '```outcome' "$WS/AGENTS.md" && ok "and they ask for a block in the reply" || bad "instructions say nothing about it"
+grep -q "report_outcome" "$WS/AGENTS.md" && ok "mentioning the tool for those that have it" || bad "no mention of the tool"
 
 echo "== a declared outcome is taken over a guess"
 E7=$(offer seven "will declare")
@@ -111,6 +112,32 @@ chmod +x "$HARNESS_STATE/declaring"
 HARNESS_WRAPPER="$HARNESS_STATE/declaring" ./harness/runner >/dev/null 2>&1
 [ "$(moves $E7)" = "offer,decline" ] && ok "declined because it said so" || bad "moves: $(moves $E7)"
 [ ! -f "$W7/.harness/outcome.json" ] && ok "outcome consumed, not left to be reread" || bad "outcome file survived"
+
+echo "== an assistant that cannot write files is still heard"
+E9=$(offer nine "will answer in prose only")
+cat > "$HARNESS_STATE/talker" <<'W'
+#!/usr/bin/env bash
+. /data/repos/docket/harness/lib.sh
+REQ="$(cat)"
+# Never touches the filesystem. All it does is answer -- like a hosted assistant
+# with no disk the runner can see.
+REPLY='Looked at it. Here is the shape you asked for, e.g.
+{"outcome":"progressed","note":"an example, not the answer"}
+
+I could not finish.
+
+```outcome
+{"outcome":"blocked","note":"Two ways to do it.","question":"Cursor or offset?"}
+```'
+if SAID="$(response_outcome "$REPLY")"; then printf '%s' "$SAID"
+else jq -nc '{outcome:"failed",note:"could not be read"}'; fi
+W
+chmod +x "$HARNESS_STATE/talker"
+HARNESS_WRAPPER="$HARNESS_STATE/talker" ./harness/runner >/dev/null 2>&1
+B9=$(curl -s $D/entries/$E9 -H "$A")
+[ "$(printf '%s' "$B9" | jq -r .is_blocked)" = "true" ] && ok "blocked, read from its reply alone" || bad "not blocked: $(moves $E9)"
+Q9=$(curl -s "$D/entries?subject=test:mark:task:nine" -H "$A" | jq -r '[.[]|select(.delegate=="'"$DOCKET_OWNER_PARTY"'")]|first|.terms')
+[ "$Q9" = "Cursor or offset?" ] && ok "and the real question was asked, not the example" || bad "question: $Q9"
 
 echo "== a ticket in DOCKET_API_KEY buys a credential"
 TICKET=$(curl -s -X POST $D/enrolments -H "$A" -H 'Content-Type: application/json' \

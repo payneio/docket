@@ -93,9 +93,13 @@ let its own `--session-id` do the work.
 
 ## What the assistant is told
 
-`AGENTS.md` is copied into every workspace on every run (and as `CLAUDE.md`,
-since not every tool follows a symlink out of a directory). It says one thing
-that matters: **write `.harness/outcome.json` before stopping.**
+Three channels, and the runner takes the first that answers:
+
+| | how | who has it |
+|---|---|---|
+| 1. `report_outcome` tool | MCP, validated, a bad call is refused with a reason it can act on | `claude-code`, `amplifier-agent` |
+| 2. a block in the final response | ```` ```outcome ```` … ```` ``` ```` at the end | **everyone** |
+| 3. its prose | grepped for a blocker; may only be wrong towards `progressed` | last resort |
 
 ```json
 { "outcome": "blocked",
@@ -103,13 +107,19 @@ that matters: **write `.harness/outcome.json` before stopping.**
   "question": "Delete old rows after 90 days, or archive them?" }
 ```
 
-Without it a wrapper has to read the assistant's prose for the word "blocked",
-which works until it doesn't and then fails silently in the expensive direction.
-With it, `declined` becomes something an assistant can actually say — and the
-whole arrangement exists so that refusing is sayable.
+**The response is the floor, not the file.** An assistant that is hosted,
+sandboxed, or behind a gateway may have no filesystem the runner can see; all of
+them answer. `AGENTS.md` (copied into every workspace on every run, and again as
+`CLAUDE.md`, since not every tool follows a symlink) asks for the block.
 
-Wrappers consume the file, so a stale one cannot be read as this run's answer,
-and the runner clears it before each run in case a wrapper died before it could.
+`.harness/outcome.json` still exists and is invisible to the assistant: it is how
+the MCP server, being a subprocess, hands its answer back to the runner. Wrappers
+consume it, and the runner clears it before each run, so a stale one cannot be
+read as this run's answer.
+
+The last block wins, so an assistant that sketches the format while thinking
+aloud is not taken at its example. A `blocked` without a question is rejected on
+every channel — it is as useless in a response as in a tool call.
 
 ## Verifiers
 

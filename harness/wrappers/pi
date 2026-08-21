@@ -35,11 +35,20 @@ printf '%s\n' "$OUT" >&2
 # `--mode json` shape is not guaranteed across versions, so take the first thing
 # that looks like a summary and fall back to the raw tail rather than reporting
 # nothing.
-SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null | head -c 400)"
-[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null)"
+[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

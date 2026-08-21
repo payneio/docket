@@ -67,10 +67,19 @@ touch "$STATE/ran"
 # needs none of the guessing the other wrappers do about where a summary lives.
 ERR="$(printf '%s' "$OUT" | jq -r '.error // empty' 2>/dev/null)"
 [ -n "$ERR" ] && { failed_result "$(printf '%s' "$ERR" | head -c 300)"; exit 0; }
-SUMMARY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null | head -c 400)"
+REPLY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null)"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

@@ -145,13 +145,13 @@ result_of() {
 #: register can hold. Silence is the failure the whole design is arranged against.
 failed_result() { jq -nc --arg n "$1" '{outcome:"failed", note:$n}'; }
 
-#: What the assistant said its own outcome was, if it said.
+#: An outcome left by the `report_outcome` tool.
 #:
-#: `AGENTS.md` tells it to write `.harness/outcome.json` before stopping. That is
-#: worth far more than reading its prose for the word "blocked": an assistant
-#: asked to state an outcome states one, and an assistant guessed at is guessed
-#: at wrong eventually. Every one of these tools can write a file, which is the
-#: only capability this convention assumes.
+#: The file is the tool's transport, not the assistant's contract -- an MCP
+#: server is a subprocess and has no other way to hand an answer to the runner.
+#: Assistants are asked for a block in their final response instead, because a
+#: filesystem the runner can see is a thing not all of them have and a final
+#: response is a thing all of them do.
 #:
 #: Consumed, not just read. A stale outcome from last week's run reported as this
 #: run's would be worse than having none.
@@ -184,6 +184,44 @@ install_outcome_tool() {  # <workspace> -> path, or nothing
     return 1
   fi
   chmod +x "$dest" && printf '%s' "$dest"
+}
+
+#: Validate and tidy an outcome object, or fail.
+#:
+#: Shared so that every channel is held to the same shape -- a `blocked` with no
+#: question is as useless arriving in a response as it is in a tool call.
+normalise_outcome() {  # <json>
+  printf '%s' "$1" | jq -ce '
+    select(.outcome | type == "string")
+    | select(.outcome | test("^(delivered|progressed|blocked|declined|failed)$"))
+    | {outcome, note: ((.note // "") | tostring), question: ((.question // "") | tostring)}
+    | select(.outcome != "blocked" or .question != "")
+  ' 2>/dev/null
+}
+
+#: The outcome the assistant stated in its final response.
+#:
+#: The one channel every assistant has. Not all of them can write a file the
+#: runner will ever see -- a hosted agent, a sandboxed one, anything behind a
+#: gateway -- but all of them answer, so this is the floor that the tool and the
+#: file sit above rather than the other way round.
+#:
+#: Read as a fenced block tagged `outcome`, and failing that as a bare JSON
+#: object on its own line. The **last** one wins, so an assistant that quotes the
+#: format earlier while explaining itself is not taken at its example.
+response_outcome() {  # <final response text>
+  local text="$1" block line
+  block="$(printf '%s\n' "$text" | awk '
+    /^[[:space:]]*```[[:space:]]*outcome[[:space:]]*$/ { inb=1; buf=""; next }
+    inb && /^[[:space:]]*```/                          { inb=0; last=buf; next }
+    inb                                                { buf = buf $0 "\n" }
+    END { printf "%s", last }')"
+  if [ -n "$block" ]; then
+    normalise_outcome "$block" && return 0
+  fi
+  line="$(printf '%s\n' "$text" | grep -oE '\{[^{}]*"outcome"[^{}]*\}' | tail -1)"
+  [ -n "$line" ] && normalise_outcome "$line" && return 0
+  return 1
 }
 EOF_src_lib
 }
@@ -374,18 +412,18 @@ asked about this again next week, you will be back here with whatever you left.
 
 **You do not need to know anything about the register that sent you.** You will
 not be asked to poll it, read it, or report to it. Something else does that, and
-it does it from what you write below.
+it does it from what you say below.
 
 ## Say what happened before you stop
 
-Write `.harness/outcome.json` before you finish:
+If you have a `report_outcome` tool, call it. Otherwise **end your final
+response** with a fenced block, and nothing after it:
 
-```json
-{
-  "outcome": "delivered",
-  "note": "One line. This is what a person reads later."
-}
+````
+```outcome
+{"outcome": "delivered", "note": "One line. This is what a person reads later."}
 ```
+````
 
 `outcome` is one of:
 
@@ -397,15 +435,15 @@ Write `.harness/outcome.json` before you finish:
 | `declined` | this is not yours to do, or you should not be the one doing it |
 | `failed` | you could not work — a broken tool, a missing dependency |
 
-When you are `blocked`, add the question:
+When you are `blocked`, the question is required:
 
-```json
-{
-  "outcome": "blocked",
-  "note": "Cannot pick between two schemas without knowing the retention rule.",
-  "question": "Should old rows be deleted or archived after 90 days?"
-}
+````
+```outcome
+{"outcome": "blocked",
+ "note": "Cannot pick between two schemas without knowing the retention rule.",
+ "question": "Should old rows be deleted or archived after 90 days?"}
 ```
+````
 
 That question is **opened as a real request to the person who asked you**, and
 stays outstanding until they answer it. It is not a note in a log. So ask it the
@@ -414,10 +452,10 @@ your confusion.
 
 ## Why this matters more than it looks
 
-Without the file, whatever ran you has to guess your outcome by reading your
-prose for words like "blocked". That works until it doesn't, and when it fails
-it fails silently in the expensive direction — work recorded as progressing
-while it is stuck, or as finished while it is not.
+Without it, whatever ran you has to guess your outcome by reading your prose for
+words like "blocked". That works until it doesn't, and when it fails it fails
+silently in the expensive direction — work recorded as progressing while it is
+stuck, or as finished while it is not.
 
 Two things follow:
 
@@ -430,6 +468,9 @@ Two things follow:
   while nothing changes looks like attention and is worse than silence, because
   it hides how long the work has actually been stuck. If you did nothing, say
   what stopped you.
+
+If you say it more than once, the last one counts — so if you sketch the format
+while thinking aloud, put the real answer at the end.
 
 ## Do not
 
@@ -647,11 +688,20 @@ SID="$(printf '%s' "$OUT" | jq -r '.session_id // .session // empty' 2>/dev/null
 
 [ $RC -ne 0 ] && { failed_result "amplifier exited $RC"; exit 0; }
 
-SUMMARY="$(printf '%s' "$OUT" | jq -r '.response // .result // .content // empty' 2>/dev/null | head -c 400)"
-[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+REPLY="$(printf '%s' "$OUT" | jq -r '.response // .result // .content // empty' 2>/dev/null)"
+[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'
@@ -728,10 +778,19 @@ touch "$STATE/ran"
 # needs none of the guessing the other wrappers do about where a summary lives.
 ERR="$(printf '%s' "$OUT" | jq -r '.error // empty' 2>/dev/null)"
 [ -n "$ERR" ] && { failed_result "$(printf '%s' "$ERR" | head -c 300)"; exit 0; }
-SUMMARY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null | head -c 400)"
+REPLY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null)"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'
@@ -814,14 +873,23 @@ fi
 # The model's own summary, not a slice of its JSON. A report made of two hundred
 # arbitrary characters is barely better than silence, and that is what the old
 # runner was posting every minute when its `jq` path came up empty.
-SUMMARY="$(printf '%s' "$OUT" | jq -r '.result // empty' 2>/dev/null | head -c 400)"
+REPLY="$(printf '%s' "$OUT" | jq -r '.result // empty' 2>/dev/null)"
+# The whole reply for parsing -- the outcome block is at the *end* of it, so a
+# truncated copy is exactly the wrong thing to look in. The short form is only
+# ever the note.
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400)"
 [ -z "$SUMMARY" ] && SUMMARY="ran, but said nothing a summary could be made of"
 
-# What it said its outcome was, if it said. AGENTS.md in the workspace asks for
-# `.harness/outcome.json`, and an assistant asked to state an outcome states one.
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic below is a
+# last resort. Its own note beats ours, so the summary is kept only when it
+# left none.
 if DECLARED="$(declared_outcome "$WS")"; then
-  # Its own note is better than ours; keep the summary only if it left none.
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 
@@ -905,11 +973,20 @@ SID="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.sessionID? // .session_id? // .id?
 
 [ $RC -ne 0 ] && { failed_result "opencode exited $RC"; exit 0; }
 
-SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.text? // .content? // .result? // empty)] | last // empty' 2>/dev/null | head -c 400)"
-[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.text? // .content? // .result? // empty)] | last // empty' 2>/dev/null)"
+[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'
@@ -954,11 +1031,20 @@ printf '%s\n' "$OUT" >&2
 # `--mode json` shape is not guaranteed across versions, so take the first thing
 # that looks like a summary and fall back to the raw tail rather than reporting
 # nothing.
-SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null | head -c 400)"
-[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+REPLY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null)"
+[ -z "$REPLY" ] && REPLY="$(printf '%s' "$OUT" | tail -c 2000 | tr -d '\000')"
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400 | tr '\n' ' ')"
 
+# Three channels, best first. The tool is validated and can refuse a bad call;
+# the response is the one every assistant has; the prose heuristic is a last
+# resort and may only be wrong towards `progressed`, which leaves the work ours
+# and the register honest that nothing moved.
 if DECLARED="$(declared_outcome "$WS")"; then
   printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
   exit 0
 fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

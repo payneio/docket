@@ -112,13 +112,13 @@ result_of() {
 #: register can hold. Silence is the failure the whole design is arranged against.
 failed_result() { jq -nc --arg n "$1" '{outcome:"failed", note:$n}'; }
 
-#: What the assistant said its own outcome was, if it said.
+#: An outcome left by the `report_outcome` tool.
 #:
-#: `AGENTS.md` tells it to write `.harness/outcome.json` before stopping. That is
-#: worth far more than reading its prose for the word "blocked": an assistant
-#: asked to state an outcome states one, and an assistant guessed at is guessed
-#: at wrong eventually. Every one of these tools can write a file, which is the
-#: only capability this convention assumes.
+#: The file is the tool's transport, not the assistant's contract -- an MCP
+#: server is a subprocess and has no other way to hand an answer to the runner.
+#: Assistants are asked for a block in their final response instead, because a
+#: filesystem the runner can see is a thing not all of them have and a final
+#: response is a thing all of them do.
 #:
 #: Consumed, not just read. A stale outcome from last week's run reported as this
 #: run's would be worse than having none.
@@ -151,4 +151,42 @@ install_outcome_tool() {  # <workspace> -> path, or nothing
     return 1
   fi
   chmod +x "$dest" && printf '%s' "$dest"
+}
+
+#: Validate and tidy an outcome object, or fail.
+#:
+#: Shared so that every channel is held to the same shape -- a `blocked` with no
+#: question is as useless arriving in a response as it is in a tool call.
+normalise_outcome() {  # <json>
+  printf '%s' "$1" | jq -ce '
+    select(.outcome | type == "string")
+    | select(.outcome | test("^(delivered|progressed|blocked|declined|failed)$"))
+    | {outcome, note: ((.note // "") | tostring), question: ((.question // "") | tostring)}
+    | select(.outcome != "blocked" or .question != "")
+  ' 2>/dev/null
+}
+
+#: The outcome the assistant stated in its final response.
+#:
+#: The one channel every assistant has. Not all of them can write a file the
+#: runner will ever see -- a hosted agent, a sandboxed one, anything behind a
+#: gateway -- but all of them answer, so this is the floor that the tool and the
+#: file sit above rather than the other way round.
+#:
+#: Read as a fenced block tagged `outcome`, and failing that as a bare JSON
+#: object on its own line. The **last** one wins, so an assistant that quotes the
+#: format earlier while explaining itself is not taken at its example.
+response_outcome() {  # <final response text>
+  local text="$1" block line
+  block="$(printf '%s\n' "$text" | awk '
+    /^[[:space:]]*```[[:space:]]*outcome[[:space:]]*$/ { inb=1; buf=""; next }
+    inb && /^[[:space:]]*```/                          { inb=0; last=buf; next }
+    inb                                                { buf = buf $0 "\n" }
+    END { printf "%s", last }')"
+  if [ -n "$block" ]; then
+    normalise_outcome "$block" && return 0
+  fi
+  line="$(printf '%s\n' "$text" | grep -oE '\{[^{}]*"outcome"[^{}]*\}' | tail -1)"
+  [ -n "$line" ] && normalise_outcome "$line" && return 0
+  return 1
 }
