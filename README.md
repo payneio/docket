@@ -46,11 +46,30 @@ first-class and people second-class has broken the point of it.
 uv sync
 uv run alembic upgrade head          # creates the `docket` schema
 uv run docket                        # :9006, or DOCKET_UDS=/run/docket.sock
-uv run pytest tests/ -q              # needs the Wild PC Postgres
+open http://localhost:9006/          # the board; it asks for DOCKET_TOKEN once
+./scripts/check.sh                   # ruff, mypy, pytest — before any commit
 ./tests/peercred_check.sh            # needs sudo and a fleetix principal
 ```
 
 `DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`, `DOCKET_UDS`.
+
+Tests use a database of their own (`docket_test`, or `DOCKET_TEST_DATABASE_URL`)
+and refuse to start against the register, so they are safe to run on a live box
+with the service up.
+
+## The board
+
+`http://localhost:9006/` — what is waiting on you, what you are waiting on, and
+how long each has *actually* been stuck. Served by docket itself rather than by
+wild-life, because the register must not require wild-life to be running and a
+surface that did would make that only half true. The cost is that a subject's
+label is a snapshot taken when the entry was made; the page says so.
+
+Quiet and stuck are different numbers and the difference is the point.
+`quiet_for_seconds` is time since anybody spoke; `stalled_for_seconds` is time
+since anything *moved*. A party reporting every minute without progressing keeps
+the first near zero forever, which is what happened here on the first day the
+register held anything real.
 
 ## Where to start
 

@@ -119,8 +119,53 @@ candidates and even those need not be carried.
 *Done when:* no wild-life table can assert who is holding work, and `/tasks/mine`
 still returns the right queue from `responsible_id` alone.
 
+**P6 · Ground it.** ✅ Done. The suite ran against the live castle database and
+cleaned up by `DELETE ... WHERE subject LIKE 'test:mark%'`, which put one typo in
+a predicate between a test run and the register — and meant no CI could exist,
+because there is only one castle. `tests/__init__.py` redirects at `docket_test`
+before docket is imported at all; `conftest` creates it, migrates into it, and
+drops the schema after. `peercred_check.sh` needed it more, being a real server.
+Plus ruff, mypy and `scripts/check.sh`.
+*Done when:* the suite passes and the register's row counts do not move.
+
+**P7 · Close the holes.** ✅ Done. Reading was unscoped — any registered uid could
+read every conversation with anyone, including the `mailto:` parties. Now scoped
+to requester, delegate or accountable, and a stranger gets 404 rather than 403,
+because "that exists and is not yours" already says somebody owes somebody
+something. A move takes `SELECT ... FOR UPDATE`; without it two movers both wrote
+`max(seq) + 1`. Self-offers and self-redirects refused; the listing bounded.
+*Done when:* a concurrent-move test returns one 200 and one 409 rather than a
+500, and fails when the lock is removed.
+
+**P8 · Quiet is not stuck.** ✅ Done. The register could say how long since
+somebody spoke and not how long since anything happened, and on the first real
+day that was the whole story: seven identical updates in thirty-one minutes kept
+`quiet_for_seconds` under sixty while nothing had moved since the accept.
+Derived, never stored: `last_progress_at`, `stalled_for_seconds`,
+`updates_since_progress`, `whose_turn`. `blocked_on` makes the edge that was
+already there in prose — a stuck delegate opened a second entry and recorded the
+link as a sentence in a note. Whether a block still binds is derived from whether
+that entry is open, so answering the question unblocks the work by itself.
+`service.py` holds what a move means, so the board and the API cannot disagree.
+*Done when:* the live register reports `updates_since_progress: 7` on `2ee5a2b7`
+with stalled measured from 16:09 rather than 16:18. It does.
+
+**P9 · The board.** ✅ Done. `http://localhost:9006/` — served by docket, not
+added to wild-life's SPA, because the register must not require wild-life to be
+running and a surface that did would make that only half true. Server-rendered,
+no build step, no JS. A browser cannot present peer credentials, so it asks for
+the token once and keeps it in an HttpOnly SameSite=Strict cookie whose value is
+the token: the cookie *is* the credential, and signing it would only hide that.
+*Done when:* opening it shows the planner's unanswered question with its 27 hours
+on it. It did — and the question had been invisible for a day, which is the
+answer to the end-of-P2 checkpoint below.
+
 **P5 · The wire.** A2A Agent Card and task lifecycle out; iTIP `VTODO` out,
-reusing the iMIP plumbing in `api/src/wild_life/mail/`.
+reusing the iMIP plumbing in `api/src/wild_life/mail/`. Two prerequisites belong
+with it: `external_ref` is not unique, so a retried inbound `REQUEST` opens a
+second conversation; and `on_behalf_of` is accepted even for a party that has a
+local identity and could have spoken for itself, which is what makes `attested`
+advisory rather than meaningful.
 *Done when:* a party with no account here accepts by replying to an email.
 
 ## Critical files
@@ -160,12 +205,14 @@ short.
 
 The committed plan put the checkpoint at P4, which is too late. Move it earlier:
 
-- **End of P2 — has anything but a test created an entry?** ⏸ **Due now, and the
-  answer is no.** Zero entries exist that were not created by a test and deleted
-  after. By this plan's own terms P3 is not yet justified: the loop has to be
-  *used* — offer something real to a real person and see whether the register
-  earns its place — before the agents are rewired to it and before four tables
-  are dropped in wild-life.
+- **End of P2 — has anything but a test created an entry?** ✅ **Yes, and the
+  answer took a day to read.** Two real entries, one of them the planner asking
+  whether a public-facing brief was inside its delegation scope — a question it
+  says it had already asked four times through the old Requests table. It sat
+  `offered` and unanswered for twenty-seven hours. The register held the right
+  fact the whole time and nothing put it in front of anybody, which is what P9
+  is for. The loop earning its place and the loop being *read* turned out to be
+  two different questions, and only the first one was on this list.
 - **End of P3 — has a party who is not Paul made a move?** ✅ Yes. The planner
   accepted an offer and reported on it from uid 40002, over its own socket, with
   no credential presented. Both moves are `attested: true`; Paul's offer is not.

@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}docket{% endblock %}</title>
+<style>
+  /* Inline rather than mounted: one stylesheet for one page, and a served file
+     would be one more thing that can be missing when the register is the thing
+     you came here to read. */
+  :root {
+    --ink: #1b1b1a; --dim: #6a6a66; --faint: #a6a6a0;
+    --rule: #e2e1dc; --page: #faf9f6; --card: #fff;
+    --wait: #8a5a00; --ours: #1b1b1a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--ink); background: var(--page);
+    margin: 0; padding: 2.5rem 1.5rem 6rem; }
+  main { max-width: 46rem; margin: 0 auto; }
+  a { color: inherit; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em;
+       margin: 0 0 2.5rem; color: var(--dim); }
+  h1 b { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+       color: var(--dim); font-weight: 600;
+       margin: 2.5rem 0 .75rem; padding-bottom: .4rem; border-bottom: 1px solid var(--rule); }
+  h2 span { float: right; color: var(--faint); letter-spacing: 0; }
+  .entry { background: var(--card); border: 1px solid var(--rule);
+           border-radius: 3px; padding: .8rem .9rem; margin-bottom: .5rem; }
+  .entry.mine { border-left: 3px solid var(--wait); }
+  .line1 { display: flex; gap: .8rem; align-items: baseline;
+           color: var(--dim); font-size: 13px; }
+  .state { font-weight: 600; color: var(--ink); min-width: 5.5rem; }
+  .age { min-width: 3.5rem; }
+  .who { color: var(--dim); }
+  .label { margin: .35rem 0 .1rem; }
+  .label a { text-decoration: none; }
+  .label a:hover { text-decoration: underline; }
+  .snap { color: var(--faint); font-size: 12px; }
+  .terms { color: var(--dim); font-size: 13px; margin: .15rem 0; }
+  .warn { color: var(--wait); font-size: 13px; margin: .2rem 0 0; }
+  .moves { margin-top: .55rem; display: flex; flex-wrap: wrap; gap: .3rem; }
+  .moves form { display: inline; }
+  button { font: inherit; font-size: 12px; cursor: pointer;
+           background: var(--page); color: var(--ink);
+           border: 1px solid var(--rule); border-radius: 3px; padding: .2rem .6rem; }
+  button:hover { border-color: var(--dim); }
+  button.theirs { color: var(--dim); font-style: italic; }
+  .empty { color: var(--faint); padding: .4rem 0; }
+  .note { color: var(--faint); font-size: 12px; margin-top: 3rem;
+          border-top: 1px solid var(--rule); padding-top: .8rem; }
+  .error { background: #fff4f0; border: 1px solid #e8c4b8; color: #8a2d00;
+           padding: .6rem .8rem; border-radius: 3px; margin-bottom: 1.2rem; font-size: 13px; }
+  table.log { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: .5rem; }
+  table.log td { padding: .3rem .6rem .3rem 0; border-bottom: 1px solid var(--rule);
+                 vertical-align: top; color: var(--dim); }
+  table.log td.move { color: var(--ink); font-weight: 600; }
+  table.log td.note { color: var(--ink); font-weight: 400; }
+  input[type=password], input[type=text], textarea {
+    font: inherit; font-size: 13px; padding: .35rem .5rem; width: 100%;
+    border: 1px solid var(--rule); border-radius: 3px; background: var(--card); }
+  textarea { margin-bottom: .4rem; }
+</style>
+<main>
+  <h1><b>docket</b> &nbsp;›&nbsp; {% block heading %}{{ heading }}{% endblock %}</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% block body %}{% endblock %}
+</main>

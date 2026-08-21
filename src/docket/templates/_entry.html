@@ -1,0 +1,28 @@
+{% macro card(e, names, mine) %}
+<div class="entry {% if mine %}mine{% endif %}">
+  <div class="line1">
+    <span class="state">{{ e.state }}</span>
+    <span class="age">{{ e.stalled_for_seconds | age }}</span>
+    <span class="who">{{ names[e.requester] }} &rarr; {{ names[e.delegate] }}</span>
+  </div>
+  <p class="label">
+    <a href="/board/entries/{{ e.id }}">{{ e.subject_label or e.subject }}</a>{% if e.subject_label %}<span class="snap"> *</span>{% endif %}
+  </p>
+  {% if e.terms %}<p class="terms">{{ e.terms }}</p>{% endif %}
+  {% if e.updates_since_progress %}
+    <p class="warn">{{ e.updates_since_progress }} update{{ '' if e.updates_since_progress == 1 else 's' }} &middot; no progress</p>
+  {% endif %}
+  {% if e.is_blocked %}
+    <p class="warn">waiting on <a href="/board/entries/{{ e.blocked_on }}">another entry</a></p>
+  {% endif %}
+  {% if e.expected_by %}<p class="terms">undertaken by {{ e.expected_by }}</p>{% endif %}
+  <div class="moves">
+    {% for m in e.available_moves %}
+      <form method="post" action="/board/entries/{{ e.id }}/moves">
+        <input type="hidden" name="move" value="{{ m }}">
+        <button type="submit">{{ m }}</button>
+      </form>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}

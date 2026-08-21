@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block heading %}sign in{% endblock %}
+{% block body %}
+<p class="terms">A browser cannot present peer credentials, so the board asks for
+the register's token. Agents never come this way — they arrive on the socket and
+the kernel says who they are.</p>
+<form method="post" action="/board/sign-in">
+  <input type="password" name="token" autofocus placeholder="DOCKET_TOKEN" autocomplete="current-password">
+  <p><button type="submit">sign in</button></p>
+</form>
+{% endblock %}

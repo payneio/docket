@@ -1,8 +1,13 @@
 """Configuration for docket."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 DB_SCHEMA = "docket"
+#: The board's templates. Packaged beside the code, not configurable: they are
+#: part of the service, the way the transition table is.
+TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 class Settings(BaseSettings):

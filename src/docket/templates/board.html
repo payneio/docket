@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_entry.html" as e_ %}
+{% block heading %}{{ names[me] }}{% endblock %}
+{% block body %}
+
+<h2>Waiting on me <span>{{ mine | length }}</span></h2>
+{% for e in mine %}{{ e_.card(e, names, true) }}{% else %}
+  <p class="empty">Nothing is waiting on you.</p>
+{% endfor %}
+
+<h2>I'm waiting on <span>{{ theirs | length }}</span></h2>
+{% for e in theirs %}{{ e_.card(e, names, false) }}{% else %}
+  <p class="empty">You are waiting on nothing.</p>
+{% endfor %}
+
+{% if watching %}
+<h2>Accountable, not in the conversation <span>{{ watching | length }}</span></h2>
+{% for e in watching %}{{ e_.card(e, names, false) }}{% endfor %}
+{% endif %}
+
+<p class="note">
+  * a label is a snapshot taken when the entry was made, not a fact — docket
+  never resolves a subject, so a renamed task still reads by its old name here.
+  The system that authored it has the live one.<br><br>
+  Ages are measured from the last move that <em>changed</em> something. A party
+  that reports every minute without moving stays as old as it really is.
+</p>
+{% endblock %}

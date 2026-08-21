@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block heading %}{{ entry.subject_label or entry.subject }}{% endblock %}
+{% block body %}
+
+<div class="entry {% if entry.whose_turn and entry.whose_turn == entry.your_role %}mine{% endif %}">
+  <div class="line1">
+    <span class="state">{{ entry.state }}</span>
+    <span class="age">{{ entry.stalled_for_seconds | age }}</span>
+    <span class="who">{{ names[entry.requester] }} &rarr; {{ names[entry.delegate] }}</span>
+  </div>
+  <p class="terms">subject <code>{{ entry.subject }}</code></p>
+  {% if entry.subject_label %}
+    <p class="snap">label snapshotted {{ entry.label_as_of.date() if entry.label_as_of }}; may be stale</p>
+  {% endif %}
+  {% if entry.terms %}<p class="terms">terms — {{ entry.terms }}</p>{% endif %}
+  <p class="terms">accountable {{ names[entry.accountable] }}
+    {%- if entry.expected_by %} &middot; undertaken by {{ entry.expected_by }}{% endif %}
+    {%- if entry.whose_turn %} &middot; {{ entry.whose_turn }}'s move{% endif %}</p>
+  {% if entry.is_blocked %}
+    <p class="warn">waiting on <a href="/board/entries/{{ entry.blocked_on }}">another entry</a></p>
+  {% endif %}
+</div>
+
+{% if entry.available_moves %}
+<h2>Your move</h2>
+<form method="post" action="/board/entries/{{ entry.id }}/moves">
+  <textarea name="note" rows="2" placeholder="a note, if there is anything to say"></textarea>
+  <div class="moves">
+    {% for m in entry.available_moves %}
+      <button type="submit" name="move" value="{{ m }}">{{ m }}</button>
+    {% endfor %}
+  </div>
+</form>
+{% else %}
+<h2>Your move</h2>
+<p class="empty">
+  {% if not entry.is_open %}This conversation has ended. The commitment has not —
+  docket cannot end one, which is why nothing here says it did.
+  {% else %}It is not your move.{% endif %}
+</p>
+{% endif %}
+
+<h2>The log <span>{{ entry.moves | length }}</span></h2>
+<table class="log">
+  {% for m in entry.moves %}
+  <tr>
+    <td>{{ m.at.strftime('%d %b %H:%M') }}</td>
+    <td class="move">{{ m.move }}</td>
+    <td>{{ names[m.by] }}</td>
+    <td>{% if m.attested %}attested{% elif m.recorded_by != m.by %}written down by {{ names[m.recorded_by] }}{% else %}unattested{% endif %}</td>
+    <td class="note">{{ m.note or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<p class="note">
+  <em>Attested</em> means the kernel vouched for the party that made the move —
+  it arrived over its own socket presenting no credential at all. Anything else
+  is testimony: true, probably, and corroborated by nobody but whoever typed it.
+</p>
+<p class="note"><a href="/board">&larr; back</a></p>
+{% endblock %}
