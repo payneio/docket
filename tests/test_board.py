@@ -138,3 +138,19 @@ async def test_an_ended_conversation_says_the_commitment_is_not(owner, agent):
         await b.post("/board/sign-in", data={"token": settings.token})
         page = (await b.get(f"/board/entries/{e['id']}")).text
     assert "The commitment has not" in page
+
+
+async def test_the_favicon_is_served_and_linked(owner):
+    async with _browser() as b:
+        b.headers.pop("Authorization", None)
+        r = await b.get("/favicon.svg")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert r.text.startswith("<svg") and r.text.endswith("</svg>")
+
+        # Asked for whether or not the page said to. Nothing is wrong, so it is
+        # not an error: an error in the log should mean something went wrong.
+        assert (await b.get("/favicon.ico")).status_code == 204
+
+        # And no page can render without pointing at it, sign-in included.
+        assert 'href="/favicon.svg"' in (await b.get("/board")).text

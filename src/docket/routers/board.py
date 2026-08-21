@@ -36,6 +36,32 @@ from docket.schemas.entries import EntryRead, MoveCreate
 router = APIRouter(tags=["board"])
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+#: Two identical dots, and something owed between them.
+#:
+#: The dots are the same size and the same colour on purpose. *A person and a
+#: machine are the same kind of party here* is the one property this whole
+#: project exists to protect, and a mark that drew the asking party larger than
+#: the answering one — or an arrow, which would have to point somewhere — would
+#: be arguing against the thing it labels. Neither party is the subject of a
+#: docket entry; the obligation between them is, so that is what gets the colour.
+#:
+#: Amber is `--wait` from the board's own palette: the colour it uses for
+#: something outstanding. On a dark tile so it reads on a light or a dark tab
+#: bar, and at 16px it survives as two pale dots joined by a warm bar.
+#:
+#: The proportions are set by how it renders at 16px rather than by how it looks
+#: large. A thinner bar is better proportioned at 32px and turns to mud at 16,
+#: where two device pixels of amber get antialiased against the tile until the
+#: colour is gone: 3.2 units holds #d99a2b, 2.2 drops it to a brown.
+FAVICON = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="7" fill="#1b1b1a"/>'
+    '<path d="M14 16h4" stroke="#d99a2b" stroke-width="3.2" stroke-linecap="round"/>'
+    '<circle cx="7.5" cy="16" r="5" fill="#faf9f6"/>'
+    '<circle cx="24.5" cy="16" r="5" fill="#faf9f6"/>'
+    "</svg>"
+)
+
 
 def _age(seconds: float | None) -> str:
     """How long, in the largest unit that still says something.
@@ -103,6 +129,26 @@ def _sign_in(request: Request, error: str | None = None) -> HTMLResponse:
 @router.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     return RedirectResponse("/board", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/favicon.svg", include_in_schema=False)
+async def favicon() -> Response:
+    """Inline rather than mounted, for the same reason the stylesheet is: one
+    file is not worth a static mount, and a mount is one more thing that can be
+    misconfigured on the machine where the register lives."""
+    return Response(
+        FAVICON,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico() -> Response:
+    """Browsers ask for this whether or not they were told to. 204 rather than
+    404 because there is nothing wrong: the icon is the SVG the page links, and
+    an error in the log should mean something went wrong."""
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/board/sign-in", include_in_schema=False)
