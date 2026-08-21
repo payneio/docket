@@ -57,7 +57,25 @@
                  vertical-align: top; color: var(--dim); }
   table.log td.move { color: var(--ink); font-weight: 600; }
   table.log td.note { color: var(--ink); font-weight: 400; }
-  input[type=password], input[type=text], textarea {
+  table.log tr.head td { color: var(--faint); font-size: 12px; letter-spacing: .06em;
+                         text-transform: uppercase; }
+  table.log tr.gone td { color: var(--faint); text-decoration: line-through; }
+  table.log tr.gone td.acts { text-decoration: none; }
+  td.acts { text-align: right; white-space: nowrap; }
+  td.acts form { display: inline; margin-left: .25rem; }
+  .minted { background: #fffaf0; border: 1px solid #e6d3a8; border-radius: 3px;
+            padding: .8rem .9rem; margin-bottom: 1.5rem; }
+  .mintedhead { margin: 0 0 .5rem; font-weight: 600; color: var(--wait); font-size: 13px; }
+  .secret { display: block; background: var(--ink); color: var(--page);
+            padding: .5rem .6rem; border-radius: 3px; word-break: break-all;
+            font-size: 13px; user-select: all; }
+  .mintedfoot { margin: .55rem 0 0; font-size: 12px; color: var(--dim); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  .two form { background: var(--card); border: 1px solid var(--rule);
+              border-radius: 3px; padding: .9rem; }
+  .two input { margin-bottom: .4rem; }
+  @media (max-width: 40rem) { .two { grid-template-columns: 1fr; } }
+  input[type=password], input[type=text], input[type=number], textarea {
     font: inherit; font-size: 13px; padding: .35rem .5rem; width: 100%;
     border: 1px solid var(--rule); border-radius: 3px; background: var(--card); }
   textarea { margin-bottom: .4rem; }

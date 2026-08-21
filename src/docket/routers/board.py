@@ -18,6 +18,7 @@ sure it does not come to hold a different one.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -25,11 +26,12 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docket import service, states
+from docket import refs, service, states
 from docket.auth import SESSION_COOKIE, Identity, identify_token, resolve_identity
 from docket.config import TEMPLATES_DIR
 from docket.db.session import get_session
-from docket.models.credentials import Credential
+from docket.models.credentials import ENROLMENT_PREFIX, Credential, digest, mint
+from docket.models.enrolments import Enrolment
 from docket.models.entries import Entry
 from docket.schemas.entries import EntryRead, MoveCreate
 
@@ -81,7 +83,12 @@ def _age(seconds: float | None) -> str:
     return f"{int(seconds // 86400)}d"
 
 
+def _since(when: datetime | None) -> str:
+    return _age((datetime.now(UTC) - when).total_seconds()) if when else "never"
+
+
 templates.env.filters["age"] = _age
+templates.env.filters["since"] = _since
 
 
 class _Names(dict):
@@ -219,6 +226,7 @@ async def board(
         "me": identity.party,
         "names": await _names(session, identity.party),
         "mine": _by_age(mine), "theirs": _by_age(theirs), "watching": _by_age(watching),
+        "owner": identity.is_operator,
         "error": error,
     })
 
@@ -281,3 +289,176 @@ async def board_move(
         )
     # POST-then-redirect, so a reload does not make the move twice.
     return RedirectResponse(f"/board/entries/{entry_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- access -----------------------------------------------------------------
+#
+# Who can act as whom, and the two ways of letting somebody new in. Owner only:
+# a party may hold a credential and must never be able to see, mint or revoke
+# anybody else's.
+#
+# **No token here can be read back.** Only a hash is stored, which is the point,
+# so the page cannot show an existing secret and does not pretend to. What it
+# offers instead is *rotate*: mint a replacement for the same party and revoke
+# the old one in the same act. That is the honest form of "I have lost it" — and
+# unlike handing back the original, it leaves a record that it happened.
+
+
+async def _access_page(
+    request: Request, session: AsyncSession, identity: Identity, minted: dict | None = None,
+) -> Response:
+    creds = list((await session.execute(
+        select(Credential).order_by(Credential.revoked_at.isnot(None), Credential.issued_at)
+    )).scalars().all())
+    tickets = list((await session.execute(
+        select(Enrolment).order_by(Enrolment.issued_at.desc())
+    )).scalars().all())
+    now = datetime.now(UTC)
+    for t in tickets:
+        t.live = (  # type: ignore[attr-defined]
+            t.revoked_at is None
+            and (t.expires_at is None or t.expires_at > now)
+            and t.used_count < t.max_uses
+        )
+    parties = sorted(
+        {c.party for c in creds}
+        | {t.party for t in tickets}
+        | set((await session.execute(select(Entry.requester))).scalars())
+        | {d for d in (await session.execute(select(Entry.delegate))).scalars() if d}
+    )
+    return templates.TemplateResponse(request, "access.html", {
+        "credentials": creds, "tickets": tickets, "known_parties": parties,
+        "names": await _names(session, identity.party), "minted": minted,
+    })
+
+
+async def _owner(request: Request, session: AsyncSession) -> Identity | Response:
+    """The owner, or the page to send back instead."""
+    identity = await resolve_identity(request, session)
+    if identity is None:
+        return _sign_in(request)
+    if not identity.is_operator:
+        return templates.TemplateResponse(
+            request, "base.html",
+            {"heading": "access", "error": "Only the register's owner sees this."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return identity
+
+
+@router.get("/board/access", include_in_schema=False)
+async def access(request: Request, session: AsyncSession = Depends(get_session)) -> Response:
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    return await _access_page(request, session, who)
+
+
+@router.post("/board/access/credentials", include_in_schema=False)
+async def issue_credential(
+    request: Request,
+    party: str = Form(...),
+    label: str = Form(""),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    if not refs.is_ref(party):
+        return await _access_page(request, session, who, None)
+    token = mint()
+    session.add(Credential(party=party, label=label or None, token_hash=digest(token)))
+    await session.flush()
+    # Rendered rather than redirected: this is the only moment the secret exists
+    # outside the holder, and putting it in a redirect would put it in the URL
+    # bar, the history and whatever logs the way.
+    return await _access_page(request, session, who, {
+        "what": "A credential", "token": token,
+        "detail": f"Acts as {party}. It can do nothing but be that party.",
+    })
+
+
+@router.post("/board/access/credentials/{credential_id}/rotate", include_in_schema=False)
+async def rotate_credential(
+    request: Request, credential_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> Response:
+    """Mint a replacement and revoke the old one, in one act.
+
+    What "grab their token" has to mean when only a hash is kept. The holder must
+    be given the new one before the old stops working, so this is a thing you do
+    knowing there is a gap — which is a better problem than a register that could
+    hand an old secret back to anybody who asked.
+    """
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    old = await session.get(Credential, credential_id)
+    if old is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+    token = mint()
+    session.add(Credential(party=old.party, label=old.label, token_hash=digest(token)))
+    if old.revoked_at is None:
+        old.revoked_at = datetime.now(UTC)
+    await session.flush()
+    return await _access_page(request, session, who, {
+        "what": "A replacement credential", "token": token,
+        "detail": f"Acts as {old.party}. The one it replaces is revoked as of now, "
+                  "so whatever was holding it is locked out until this reaches it.",
+    })
+
+
+@router.post("/board/access/credentials/{credential_id}/revoke", include_in_schema=False)
+async def revoke_credential(
+    request: Request, credential_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> Response:
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    row = await session.get(Credential, credential_id)
+    if row is not None and row.revoked_at is None:
+        row.revoked_at = datetime.now(UTC)
+    await session.flush()
+    return RedirectResponse("/board/access", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/board/access/tickets", include_in_schema=False)
+async def write_ticket(
+    request: Request,
+    party: str = Form(...),
+    label: str = Form(""),
+    hours: int = Form(1),
+    uses: int = Form(1),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    if not refs.is_ref(party):
+        return await _access_page(request, session, who, None)
+    token = mint(ENROLMENT_PREFIX)
+    session.add(Enrolment(
+        party=party, label=label or None, token_hash=digest(token),
+        expires_at=datetime.now(UTC) + timedelta(hours=max(1, min(hours, 720))),
+        max_uses=max(1, min(uses, 100)),
+    ))
+    await session.flush()
+    return await _access_page(request, session, who, {
+        "what": "A ticket", "token": token,
+        "detail": f"Spendable at POST /enrol for a credential acting as {party}. "
+                  "It cannot be presented as an identity itself.",
+    })
+
+
+@router.post("/board/access/tickets/{ticket_id}/revoke", include_in_schema=False)
+async def revoke_ticket(
+    request: Request, ticket_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> Response:
+    who = await _owner(request, session)
+    if isinstance(who, Response):
+        return who
+    row = await session.get(Enrolment, ticket_id)
+    if row is not None and row.revoked_at is None:
+        row.revoked_at = datetime.now(UTC)
+    await session.flush()
+    # Credentials already minted from it keep working; they are separate things.
+    return RedirectResponse("/board/access", status_code=status.HTTP_303_SEE_OTHER)

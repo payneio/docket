@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block heading %}access{% endblock %}
+{% block body %}
+
+{% if minted %}
+<div class="minted">
+  <p class="mintedhead">{{ minted.what }} — copy it now</p>
+  <code class="secret">{{ minted.token }}</code>
+  <p class="mintedfoot">
+    {{ minted.detail }}<br>
+    Only a hash of this is stored, so it cannot be shown again or recovered. If
+    it is lost, rotate the credential — that mints a replacement and revokes this
+    one, which is the same thing and leaves a record.
+  </p>
+</div>
+{% endif %}
+
+<h2>Credentials <span>{{ credentials | length }}</span></h2>
+{% if credentials %}
+<table class="log">
+  <tr class="head">
+    <td>who</td><td>party</td><td>issued</td><td>last used</td><td>how</td><td></td>
+  </tr>
+  {% for c in credentials %}
+  <tr class="{% if c.revoked_at %}gone{% endif %}">
+    <td class="move">{{ c.label or "—" }}</td>
+    <td title="{{ c.party }}">{{ names[c.party] }}</td>
+    <td>{{ c.issued_at.strftime('%d %b') }}</td>
+    <td>{% if c.revoked_at %}revoked {{ c.revoked_at.strftime('%d %b') }}
+        {%- elif c.last_used_at %}{{ c.last_used_at | since }} ago
+        {%- else %}never{% endif %}</td>
+    <td>{% if c.enrolment_id %}enrolled{% else %}issued{% endif %}</td>
+    <td class="acts">
+      {% if not c.revoked_at %}
+      <form method="post" action="/board/access/credentials/{{ c.id }}/rotate">
+        <button type="submit" title="mint a replacement and revoke this one">rotate</button>
+      </form>
+      <form method="post" action="/board/access/credentials/{{ c.id }}/revoke">
+        <button type="submit">revoke</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">Nobody holds one.</p>{% endif %}
+
+<h2>Tickets <span>{{ tickets | length }}</span></h2>
+<p class="terms">Spendable once for a credential, by whoever holds it. The party
+is set here and not by whoever redeems it — a ticket that let its holder name
+itself would be this register's own token with extra steps.</p>
+{% if tickets %}
+<table class="log">
+  <tr class="head"><td>for</td><td>party</td><td>expires</td><td>uses</td><td></td></tr>
+  {% for t in tickets %}
+  <tr class="{% if not t.live %}gone{% endif %}">
+    <td class="move">{{ t.label or "—" }}</td>
+    <td title="{{ t.party }}">{{ names[t.party] }}</td>
+    <td>{% if t.revoked_at %}revoked{% elif t.expires_at %}{{ t.expires_at.strftime('%d %b %H:%M') }}{% else %}never{% endif %}</td>
+    <td>{{ t.used_count }}/{{ t.max_uses }}</td>
+    <td class="acts">
+      {% if t.live %}
+      <form method="post" action="/board/access/tickets/{{ t.id }}/revoke">
+        <button type="submit">revoke</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">None outstanding.</p>{% endif %}
+
+<datalist id="parties">
+  {% for p in known_parties %}<option value="{{ p }}">{{ names[p] }}</option>{% endfor %}
+</datalist>
+
+<h2>Let somebody in</h2>
+<div class="two">
+  <form method="post" action="/board/access/tickets">
+    <p class="terms"><b>Write a ticket</b> — for an agent that will enrol itself.
+    Preferred: what sits in provisioning then expires, and the durable secret is
+    minted at the far end and never travels.</p>
+    <input name="party" list="parties" placeholder="party URI, e.g. wild-life:person:…" required>
+    <input name="label" placeholder="which agent">
+    <p><input name="hours" type="number" value="1" min="1" max="720" style="width:5rem">
+       hours &nbsp; <input name="uses" type="number" value="1" min="1" max="100" style="width:4rem">
+       uses</p>
+    <button type="submit">write it</button>
+  </form>
+
+  <form method="post" action="/board/access/credentials">
+    <p class="terms"><b>Issue a credential directly</b> — for something that
+    cannot enrol. The secret has to get there somehow, and that journey is the
+    part a ticket exists to avoid.</p>
+    <input name="party" list="parties" placeholder="party URI" required>
+    <input name="label" placeholder="which client">
+    <p></p>
+    <button type="submit">issue it</button>
+  </form>
+</div>
+
+<p class="note"><a href="/board">&larr; back to the board</a></p>
+{% endblock %}

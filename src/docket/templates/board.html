@@ -18,6 +18,9 @@
 {% for e in watching %}{{ e_.card(e, names, false) }}{% endfor %}
 {% endif %}
 
+{% if owner %}<p class="note"><a href="/board/access">access &rarr;</a> — who can
+act as whom, and how to let somebody else in.</p>{% endif %}
+
 <p class="note">
   * a label is a snapshot taken when the entry was made, not a fact — docket
   never resolves a subject, so a renamed task still reads by its old name here.

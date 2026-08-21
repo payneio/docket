@@ -78,6 +78,13 @@ holder could name its own party would be the owner's token with extra steps. An
 agent proves it was *sent*, which is all a machine can prove about itself; who it
 is stays something somebody decided.
 
+`/board/access` does all of this from a page — who holds what, when each was
+last used, and the two forms for letting somebody in. **It cannot show you an
+existing token**, because only a hash is kept; what it offers instead is
+*rotate*, which mints a replacement and revokes the old one in the same act. That
+is the honest form of "I have lost it", and unlike handing the original back it
+leaves a record.
+
 Secrets are shown once and stored as a SHA-256 — not argon2, because 256 bits
 from the system's random source has nothing to slow down. Revoked, never deleted:
 `moves.via_credential` points back, so revoking one answers what it touched.
