@@ -61,7 +61,9 @@ Corrections to the committed plan:
 2. **No `parties` table in docket.** §2 said soft reference and P1 said a table.
    A party is a soft reference `{system, type, id}` to a wild-life Person, which
    is what `fleetix/principals.yaml` already records as `principal_id`. Docket
-   keeps only a `uid → party` map for peer-credential auth.
+   keeps only credentials, and a credential names a party without owning one.
+   *(As written this said a `uid → party` map for peer-credential auth; that
+   table and that auth path went in P11.)*
 3. **`subject_label` is a display fallback, not a fact.** Store it with
    `label_as_of`; docket's own surfaces mark it as a snapshot. wild-life shows
    the live title because it has it.
@@ -72,6 +74,10 @@ Corrections to the committed plan:
    renders as unavailable. Silence is never a fact (S21, S39).
 
 ## Sequencing
+
+Completed phases below are a record of what was done and when, not a description
+of the system now. P1 and P3 in particular describe peer-credential auth over a
+unix socket, which P11 removed.
 
 The committed plan had P3 (retire wild-life's columns) before P4 (agents move).
 `my_tasks` at `routers/tasks.py:283` filters on
@@ -214,9 +220,9 @@ secret never transits. Revisit if agents span networks docket does not trust.
 **P5 · The wire.** A2A Agent Card and task lifecycle out; iTIP `VTODO` out,
 reusing the iMIP plumbing in `api/src/wild_life/mail/`. Two prerequisites belong
 with it: `external_ref` is not unique, so a retried inbound `REQUEST` opens a
-second conversation; and `on_behalf_of` is accepted even for a party that has a
-local identity and could have spoken for itself, which is what makes `attested`
-advisory rather than meaningful.
+second conversation; and `on_behalf_of` is accepted even for a party that holds a
+credential and could have spoken for itself, so "Sara declined" is recordable
+against a Sara who is sitting right there.
 *Done when:* a party with no account here accepts by replying to an email.
 
 ## Critical files
@@ -250,6 +256,9 @@ short.
   owed.
 - **P4:** `pytest tests/ -v` plus `entities/coverage.test.tsx`, then confirm
   `/tasks/mine` returns Paul's queue with `assignee_id` gone.
+- **P11:** issue a ticket, spend it from off-box over HTTPS, and confirm the
+  newcomer acts as its party, cannot spend the ticket twice, cannot present it as
+  an identity, cannot mint another, and reads nothing it is not named on.
 - **Throughout:** `pnpm build` must pass before any deploy.
 
 ## What would show this is wrong

@@ -45,13 +45,12 @@ first-class and people second-class has broken the point of it.
 ```bash
 uv sync
 uv run alembic upgrade head          # creates the `docket` schema
-uv run docket                        # :9006, or DOCKET_UDS=/run/docket.sock
-open http://localhost:9006/          # the board; it asks for DOCKET_TOKEN once
+uv run docket                        # :9006, loopback; Caddy fronts it
+open http://localhost:9006/          # the board; it asks for a token once
 ./scripts/check.sh                   # ruff, mypy, pytest — before any commit
-./tests/peercred_check.sh            # needs sudo and a fleetix principal
 ```
 
-`DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`, `DOCKET_UDS`.
+`DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`.
 
 ## How a party gets in
 
