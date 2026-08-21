@@ -125,7 +125,7 @@ does what the old runner hardcoded for everybody.
 ## Putting one on a new box
 
 ```bash
-curl -fsSL <url>/harness/install.sh | bash -s -- --harness claude-code
+curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh | bash -s -- --harness claude-code
 export DOCKET_URL=https://docket.example
 export DOCKET_API_KEY=dke_…        # a ticket, from /board/access
 docket-claude
@@ -136,7 +136,7 @@ docket-claude
 
 ```bash
 ./install.sh --harness ./my-wrapper
-curl -fsSL <url>/install.sh | bash -s -- --harness https://example/their-wrapper
+curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh | bash -s -- --harness https://example.com/their-wrapper
 ```
 
 A wrapper is an executable implementing the contract above, so installing a new

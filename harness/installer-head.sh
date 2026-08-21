@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install a docket runner on this machine.
 #
-#   curl -fsSL <url>/install.sh | bash -s -- --harness claude
+#   curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh \
+#     | bash -s -- --harness claude-code
 #   ./install.sh --harness pi --dir ~/bin
 #
 # Writes ONE executable that contains everything: the runner, its library, and

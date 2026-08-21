@@ -126,7 +126,7 @@ and a switch statement inside one runner can only serve the ones that happen to
 share a shape. See `harness/README.md`.
 
 ```bash
-HARNESS_WRAPPER=$PWD/harness/wrappers/claude harness/runner
+curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh | bash -s -- --harness claude-code
 ./harness/harness_check.sh     # the whole loop, with no model and no waiting
 ```
 
