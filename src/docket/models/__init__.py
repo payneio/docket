@@ -3,4 +3,4 @@
 from docket.models.entries import Entry, Move
 from docket.models.identities import LocalIdentity
 
-__all__ = ["Entry", "Move", "LocalIdentity"]
+__all__ = ["Entry", "LocalIdentity", "Move"]

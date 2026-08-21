@@ -169,9 +169,11 @@ async def test_a_move_a_party_makes_itself_is_attested(owner, agent):
 async def test_a_stranger_cannot_record_moves_for_others(owner, agent):
     """Recording on someone's behalf is a privilege of being in the conversation."""
     e = await _offer(owner)
-    from tests.conftest import LocalIdentity, AsyncSessionLocal
+    from tests.conftest import AsyncSessionLocal, LocalIdentity
     async with AsyncSessionLocal() as s:
-        s.add(LocalIdentity(uid=999002, party="wild-life:person:22222222-2222-2222-2222-222222222222"))
+        s.add(LocalIdentity(
+            uid=999002, party="wild-life:person:22222222-2222-2222-2222-222222222222"
+        ))
         await s.commit()
     from tests.conftest import client_as
     try:

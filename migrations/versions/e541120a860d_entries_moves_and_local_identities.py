@@ -1,7 +1,7 @@
 """entries, moves and local identities
 
 Revision ID: e541120a860d
-Revises: 
+Revises:
 Create Date: 2026-08-18 15:39:13.400729
 """
 from alembic import op

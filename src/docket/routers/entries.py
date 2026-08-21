@@ -1,7 +1,7 @@
 """The register, and the moves that change it."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -33,7 +33,7 @@ def _role(entry: Entry, party: str) -> str | None:
 def _read(entry: Entry, party: str) -> EntryRead:
     role = _role(entry, party)
     last = max((m.at for m in entry.moves), default=None)
-    quiet = (datetime.now(timezone.utc) - last).total_seconds() if last else None
+    quiet = (datetime.now(UTC) - last).total_seconds() if last else None
     return EntryRead(
         **{c.name: getattr(entry, c.name) for c in entry.__table__.columns},
         moves=list(entry.moves),
@@ -57,7 +57,7 @@ async def _record(
         Move(
             entry_id=entry.id,
             seq=await _next_seq(session, entry.id),
-            at=datetime.now(timezone.utc),
+            at=datetime.now(UTC),
             by=by,
             recorded_by=identity.party,
             # Only a move a party made itself, over a socket the kernel vouched
@@ -82,7 +82,7 @@ async def offer(
     entry = Entry(
         subject=payload.subject,
         subject_label=payload.subject_label,
-        label_as_of=datetime.now(timezone.utc) if payload.subject_label else None,
+        label_as_of=datetime.now(UTC) if payload.subject_label else None,
         requester=identity.party,
         delegate=payload.delegate,
         accountable=payload.accountable or identity.party,

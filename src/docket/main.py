@@ -11,6 +11,7 @@ permissions are whatever the umask happened to be.
 """
 
 import asyncio
+import contextlib
 import grp
 import os
 import socket
@@ -38,10 +39,9 @@ def _bind_socket(path: str, group: str) -> socket.socket:
         os.unlink(path)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.bind(path)
-    try:
+    # No such group, or not ours to give away: fall back to owner-only.
+    with contextlib.suppress(KeyError, PermissionError):
         os.chown(path, -1, grp.getgrnam(group).gr_gid)
-    except (KeyError, PermissionError):
-        pass  # no such group, or not ours to give away: fall back to owner-only
     # Connecting to a unix socket needs *write* on the inode, so 0660 is what
     # lets the fleet in and keeps everyone else out.
     os.chmod(path, 0o660)

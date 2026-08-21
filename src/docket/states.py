@@ -28,7 +28,8 @@ Move = Literal[
     "redirect", "update",
 ]
 State = Literal[
-    "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn", "redirected"
+    "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn",
+    "redirected",
 ]
 Role = Literal["requester", "delegate"]
 
@@ -50,7 +51,8 @@ MOVES: tuple[str, ...] = (
 #: is evidence that somebody spoke, never that anything progressed.
 STATE_PRESERVING: frozenset[str] = frozenset({"update"})
 STATES: tuple[str, ...] = (
-    "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn", "redirected",
+    "offered", "countered", "accepted", "delivered", "settled", "declined", "withdrawn",
+    "redirected",
 )
 
 #: A conversation that has ended. The *commitment* has not — see the module note.

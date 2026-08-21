@@ -30,6 +30,8 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",
+    "ruff>=0.15.0",
+    "mypy>=1.13.0",
 ]
 
 [tool.pytest.ini_options]
@@ -39,3 +41,43 @@ asyncio_mode = "auto"
 # connections belonging to a loop that has closed.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+# The prose in this codebase is load-bearing and wraps at 88; the code that
+# carries it runs a little wider. 100 is what the existing files already use.
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "ANN", "RUF"]
+ignore = [
+    # `Depends(...)` in a default *is* the FastAPI idiom. The rule is right about
+    # mutable defaults in general and wrong about every route in this codebase.
+    "B008",
+    # Pydantic and SQLAlchemy declarative bodies are full of bare assignments
+    # that mypy already types from the right-hand side.
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests say what they mean in their names and asserts; annotating every fixture
+# return would be noise, and `assert` is the point.
+"tests/*" = ["ANN", "S101"]
+"migrations/*" = ["ANN", "E501", "I001"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+# Not `strict`: the value here is catching a wrong type crossing a boundary, and
+# demanding annotations on every private helper buys noise rather than safety.
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Neither ships type information, and both are only touched by the test rig and
+# the migration runner.
+module = ["alembic.*", "psycopg.*"]
+ignore_missing_imports = true

@@ -5,7 +5,7 @@ principal must not be able to register itself, or peer credentials would attest
 nothing but the caller's own claim.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
@@ -70,7 +70,7 @@ async def revoke(
     row = await session.get(LocalIdentity, uid)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
-    row.revoked_at = datetime.now(timezone.utc)
+    row.revoked_at = datetime.now(UTC)
     await session.flush()
     return {"uid": uid, "revoked": True}
 
