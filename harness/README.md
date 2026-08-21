@@ -23,7 +23,8 @@ The four assistants do not agree on anything that matters here:
 | `claude` | `-p --output-format json` | `--resume <id>` | captured from the run's own output |
 | `pi` | `-p --mode json` | `--session-id <id>`, created if missing | **chosen by the caller** — nothing to store |
 | `opencode` | `run --format json` | `-s <id>` / `--continue` | captured, or implied by `--dir` |
-| `amplifier` | `run --output-format json` | `--resume <id>` | captured |
+| `amplifier-agent` | `run --output json --display ndjson` | `--session-id` + `--resume` | **chosen**, and resume is explicit |
+| `amplifier` (the CLI) | `run --output-format json` | `--resume <id>` | captured |
 
 Three incompatible ways of resuming, and one of them needs no stored state at
 all. Some assistants have their own loop, their own task source, or no
@@ -130,9 +131,21 @@ export DOCKET_API_KEY=dke_…        # a ticket, from /board/access
 docket-claude
 ```
 
-`--harness` takes `claude-code`, `pi`, `opencode`, `amplifier`, or `echo`.
+`--harness` takes `claude-code`, `amplifier-agent`, `amplifier`, `pi`,
+`opencode`, `echo` — **or a path or URL to a wrapper of your own**:
+
+```bash
+./install.sh --harness ./my-wrapper
+curl -fsSL <url>/install.sh | bash -s -- --harness https://example/their-wrapper
+```
+
+A wrapper is an executable implementing the contract above, so installing a new
+one is bundling a file rather than resolving a package. Somebody can ship a
+wrapper for an assistant nobody here has heard of without touching this
+repository, and it lands as the same single executable.
+
 `--dir` chooses where (default `~/.local/bin`), `--name` what to call it,
-`--list` shows what is available.
+`--list` shows what ships.
 
 It writes **one executable** containing the runner, the library, the wrapper and
 the instructions. It re-executes itself to invoke the wrapper, so the subprocess

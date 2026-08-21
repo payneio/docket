@@ -2,6 +2,25 @@
 # Aliases, because the assistants are known by more than one name and being told
 # "unknown harness: claude-code" when you asked for the thing you have installed
 # is a poor welcome.
+# A wrapper is an executable implementing the contract in harness/README.md, so
+# "installing a new one" is bundling a file rather than resolving a package. A
+# path or a URL is therefore as good as a name, and anybody can ship a wrapper
+# for an assistant nobody here has heard of without touching this repository.
+CUSTOM=""
+case "$HARNESS" in
+  http://*|https://*)
+    CUSTOM="$(curl -fsSL "$HARNESS")" || die "could not fetch $HARNESS"
+    : "${NAME:=docket-$(basename "${HARNESS%%\?*}")}" ;;
+  ./*|/*|../*)
+    [ -r "$HARNESS" ] || die "no wrapper at $HARNESS"
+    CUSTOM="$(cat "$HARNESS")"
+    : "${NAME:=docket-$(basename "$HARNESS")}" ;;
+esac
+if [ -n "$CUSTOM" ]; then
+  printf '%s' "$CUSTOM" | head -1 | grep -q '^#!' \
+    || die "that does not look like a wrapper: no #! on the first line"
+fi
+
 # Shell function names cannot hold a hyphen, so the embedded wrappers are named
 # without one and the names people actually type are mapped here. Being told
 # "unknown harness: amplifier-agent" when that is exactly what you have would be
@@ -21,11 +40,15 @@ AVAILABLE="$(for f in $(declare -F | sed -n 's/^declare -f src_wrapper_//p' | so
 if [ -n "${LIST:-}" ]; then
   printf 'harnesses: %s\n' "$AVAILABLE"; exit 0
 fi
-[ -n "$HARNESS" ] || die "which assistant? --harness <${AVAILABLE// /|}>"
-declare -F "src_wrapper_$HARNESS" >/dev/null || die "no harness '$HARNESS'; have: $AVAILABLE"
-
-command -v "$HARNESS" >/dev/null 2>&1 \
-  || printf 'install: note — %s is not on PATH yet; the runner will need it\n' "$HARNESS" >&2
+[ -n "$HARNESS" ] || die "which assistant? --harness <${AVAILABLE// /|}>, or a path or URL"
+if [ -z "$CUSTOM" ]; then
+  declare -F "src_wrapper_$HARNESS" >/dev/null \
+    || die "no harness '$HARNESS'; have: $AVAILABLE (or pass a path or URL)"
+  command -v "$(display_name "$HARNESS")" >/dev/null 2>&1 \
+    || command -v "$HARNESS" >/dev/null 2>&1 \
+    || printf 'install: note — %s is not on PATH yet; the runner will need it\n' \
+       "$(display_name "$HARNESS")" >&2
+fi
 
 : "${NAME:=docket-$(display_name "$HARNESS")}"
 mkdir -p "$DEST" || die "cannot create $DEST"
@@ -60,9 +83,13 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
   src_tool
   printf 'EOF_TOOL\n}\n'
 
-  printf '\n# ---- wrapper: %s ----\n' "$(display_name "$HARNESS")"
+  printf '\n# ---- wrapper: %s ----\n' "${CUSTOM:+custom }$(display_name "$HARNESS")"
   printf 'wrapper_main() {\n'
-  "src_wrapper_$HARNESS" | strip_source | sed 's/^/  /'
+  if [ -n "$CUSTOM" ]; then
+    printf '%s' "$CUSTOM" | strip_source | sed 's/^/  /'
+  else
+    "src_wrapper_$HARNESS" | strip_source | sed 's/^/  /'
+  fi
   printf '\n}\n'
   printf 'if [ "${HARNESS_ROLE:-}" = "wrapper" ]; then wrapper_main; exit $?; fi\n'
 
