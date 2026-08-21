@@ -2,6 +2,11 @@
 # amplifier-agent — the engine, not the `amplifier` CLI beside it. They are
 # different programs; this is the one built to be driven.
 #
+# Configured with AMPLIFIER_AGENT_PROVIDER / _MODEL / _MODE, deliberately not
+# the AMPLIFIER_* names the `amplifier` CLI wrapper uses: they are different
+# programs with different provider modules, and a box that runs both would
+# otherwise have one variable meaning two things.
+#
 # Continuation: **caller-chosen id plus an explicit resume**, which is the best
 # arrangement of the four here. `--session-id` is ours to pick, so it is derived
 # from the subject and never stored; `--resume` says whether to continue the
@@ -37,7 +42,7 @@ fi
 # a warning -- so it is built from exactly the keys the engine documents, and
 # `mcp` is omitted entirely when there is no tool to point at.
 jq -nc --arg mcp "$MCP_FILE" --arg tool "$TOOL" \
-  --arg provider "${AMPLIFIER_PROVIDER:-}" --arg model "${AMPLIFIER_MODEL:-}" '
+  --arg provider "${AMPLIFIER_AGENT_PROVIDER:-}" --arg model "${AMPLIFIER_AGENT_MODEL:-}" '
   {approval: {mode: "yes"}}
   + (if $tool == "" then {} else {mcp: {configPath: $mcp}} end)
   + (if $provider == "" then {} else

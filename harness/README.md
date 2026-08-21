@@ -24,6 +24,7 @@ The four assistants do not agree on anything that matters here:
 | `pi` | `-p --mode json` | `--session-id <id>`, created if missing | **chosen by the caller** — nothing to store |
 | `opencode` | `run --format json` | `-s <id>` / `--continue` | captured, or implied by `--dir` |
 | `amplifier-agent` | `run --output json --display ndjson` | `--session-id` + `--resume` | **chosen**, and resume is explicit |
+
 | `amplifier` (the CLI) | `run --output-format json` | `--resume <id>` | captured |
 
 Three incompatible ways of resuming, and one of them needs no stored state at
@@ -131,6 +132,24 @@ verifier's reason, and the entry stays yours.
 
 Unset, nothing is checked and the wrapper is believed. `verifiers/wild-life`
 does what the old runner hardcoded for everybody.
+
+### Configuring one
+
+Each wrapper reads its own variables, prefixed for the program it wraps, so a box
+running several does not have one name meaning two things:
+
+```
+CLAUDE_MODEL  CLAUDE_MAX_TURNS  CLAUDE_MCP_CONFIG  CLAUDE_ALLOWED_TOOLS
+PI_PROVIDER  PI_MODEL
+OPENCODE_MODEL  OPENCODE_AGENT
+AMPLIFIER_PROVIDER  AMPLIFIER_MODEL                     # the `amplifier` CLI
+AMPLIFIER_AGENT_PROVIDER  AMPLIFIER_AGENT_MODEL  AMPLIFIER_AGENT_MODE
+HARNESS_DEBUG=1      keep each assistant's raw stdout in the workspace
+```
+
+`HARNESS_DEBUG` is worth knowing about: every wrapper parses an output shape
+nobody documents, and when a guess is wrong the only symptom is a strange note in
+the register — by which point the output that would explain it is gone.
 
 ## Putting one on a new box
 
