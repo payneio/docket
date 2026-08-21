@@ -314,3 +314,50 @@ async def apply_move(
     await session.flush()
     await session.refresh(entry)
     return entry
+
+
+async def recent_moves(
+    session: AsyncSession, identity: Identity, limit: int = 100
+) -> list[tuple[Move, Entry]]:
+    """Everything that has happened lately, newest first.
+
+    The register is append-only and every move is dated, so a stream is the
+    shape the data already has -- what was missing was anywhere to read it. The
+    per-entry log answers "how did this go"; this answers "what happened today",
+    which is a different question and the one you ask when several parties are
+    working at once.
+
+    Scoped like everything else: the owner sees all of it, and nobody else sees
+    a move on a conversation they are not named on.
+    """
+    stmt = (
+        select(Move, Entry)
+        .join(Entry, Move.entry_id == Entry.id)
+        .order_by(Move.at.desc())
+        .limit(limit)
+    )
+    if not identity.is_operator:
+        stmt = stmt.where(
+            (Entry.requester == identity.party)
+            | (Entry.delegate == identity.party)
+            | (Entry.accountable == identity.party)
+        )
+    return [(m, e) for m, e in (await session.execute(stmt)).all()]
+
+
+async def ended(session: AsyncSession, identity: Identity, limit: int = 12) -> list[Entry]:
+    """Conversations that have finished, most recently first.
+
+    They were invisible: the board asked for open entries only, so anything
+    settled, declined or withdrawn left the page entirely and there was nowhere
+    to see what you finished last week. **An ended conversation is not an ended
+    commitment** -- that is the register's first rule -- so hiding them was also
+    hiding the cases where something is still owed and nobody is holding it.
+    """
+    rows = await session.execute(
+        scope(select(Entry), identity)
+        .where(Entry.state.in_(tuple(states.TERMINAL)))
+        .order_by(Entry.updated_at.desc())
+        .limit(limit)
+    )
+    return list(rows.scalars().all())

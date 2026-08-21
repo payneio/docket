@@ -141,3 +141,49 @@ async def test_the_favicon_is_served_and_linked(owner):
 
         # And no page can render without pointing at it, sign-in included.
         assert 'href="/favicon.svg"' in (await b.get("/board")).text
+
+
+async def test_ended_conversations_are_visible(owner, agent):
+    """They vanished entirely: the board asked for open entries only, so anything
+    settled or declined left the page and there was nowhere to see last week."""
+    done = await _offer(owner, subject_label="Something finished")
+    await agent.post(f"/entries/{done['id']}/moves", json={"move": "decline"})
+    await _offer(owner, subject_label="Something open")
+
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": settings.token})
+        page = (await b.get("/board")).text
+
+    assert "Ended" in page
+    assert "Something finished" in page and "Something open" in page
+    # The distinction that matters is stated where somebody would misread it.
+    assert "The commitment did not" in page
+
+
+async def test_the_activity_stream_is_every_move_newest_first(owner, agent):
+    a = await _offer(owner, subject_label="First thing")
+    b_ = await _offer(owner, subject_label="Second thing")
+    await agent.post(f"/entries/{a['id']}/moves", json={"move": "accept", "note": "took it"})
+    await agent.post(f"/entries/{b_['id']}/moves", json={"move": "decline", "note": "not mine"})
+
+    async with _browser() as br:
+        await br.post("/board/sign-in", data={"token": settings.token})
+        page = (await br.get("/board/activity")).text
+
+    # Across entries, not within one.
+    assert "First thing" in page and "Second thing" in page
+    assert "took it" in page and "not mine" in page
+    # Newest first: the decline came last, so it is above the accept.
+    assert page.index("not mine") < page.index("took it")
+
+
+async def test_activity_shows_only_what_you_are_party_to(owner, agent):
+    from tests.conftest import issue
+
+    e = await _offer(owner, subject_label="Private business")
+    await agent.post(f"/entries/{e['id']}/moves", json={"move": "accept", "note": "mine to do"})
+    outsider = await issue("wild-life:person:77770000-0000-0000-0000-000000000000", "outsider")
+
+    async with client_as(outsider) as stranger:
+        page = (await stranger.get("/board/activity")).text
+    assert "Private business" not in page and "mine to do" not in page

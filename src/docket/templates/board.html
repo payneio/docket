@@ -13,10 +13,30 @@
   <p class="empty">You are waiting on nothing.</p>
 {% endfor %}
 
+{% if ended %}
+<h2>Ended <span>{{ ended | length }}</span></h2>
+{% for e in ended %}
+<div class="entry">
+  <div class="line1">
+    <span class="state">{{ e.state }}</span>
+    <span class="age">{{ e.stalled_for_seconds | age }}</span>
+    <span class="who">{{ names[e.requester] }} &rarr; {{ names[e.delegate] }}</span>
+  </div>
+  <p class="label"><a href="/board/entries/{{ e.id }}">{{ e.subject_label or e.subject }}</a></p>
+</div>
+{% endfor %}
+<p class="note">The conversation ended. <b>The commitment did not</b> — nothing
+here can end one, so a subject that was declined or withdrawn is still owed and
+still offerable to somebody else.</p>
+{% endif %}
+
 {% if watching %}
 <h2>Accountable, not in the conversation <span>{{ watching | length }}</span></h2>
 {% for e in watching %}{{ e_.card(e, names, false) }}{% endfor %}
 {% endif %}
+
+<p class="note"><a href="/board/activity">activity &rarr;</a> — every move,
+newest first.</p>
 
 {% if owner %}<p class="note"><a href="/board/access">access &rarr;</a> — who can
 act as whom, and how to let somebody else in.</p>{% endif %}

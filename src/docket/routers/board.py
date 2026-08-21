@@ -224,6 +224,8 @@ async def board(
 
     return templates.TemplateResponse(request, "board.html", {
         "me": identity.party,
+        "ended": [service.read_entry(e, identity.party, blockers)
+                  for e in await service.ended(session, identity)],
         "names": await _names(session, identity.party),
         "mine": _by_age(mine), "theirs": _by_age(theirs), "watching": _by_age(watching),
         "owner": identity.is_operator,
@@ -235,6 +237,18 @@ def _by_age(entries: list[EntryRead]) -> list[EntryRead]:
     """Longest stuck first. The thing you have been ignoring the longest is the
     thing the page exists to put in front of you."""
     return sorted(entries, key=lambda e: e.stalled_for_seconds or 0, reverse=True)
+
+
+@router.get("/board/activity", include_in_schema=False)
+async def activity(request: Request, session: AsyncSession = Depends(get_session)) -> Response:
+    """What happened, across everything you can see."""
+    identity = await _identity_or_none(request, session)
+    if identity is None:
+        return _sign_in(request)
+    return templates.TemplateResponse(request, "activity.html", {
+        "moves": await service.recent_moves(session, identity),
+        "names": await _names(session, identity.party),
+    })
 
 
 @router.get("/board/entries/{entry_id}", include_in_schema=False)

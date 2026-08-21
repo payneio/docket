@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block heading %}activity{% endblock %}
+{% block body %}
+<p class="terms">Every move, newest first. The per-entry log says how one
+conversation went; this says what happened today, which is the question you ask
+when several parties are working at once.</p>
+
+<h2>Lately <span>{{ moves | length }}</span></h2>
+{% if moves %}
+<table class="log">
+  {% for m, e in moves %}
+  <tr>
+    <td>{{ m.at.strftime('%d %b %H:%M') }}</td>
+    <td class="move">{{ m.move }}</td>
+    <td>{{ names[m.by] }}</td>
+    <td>
+      <a href="/board/entries/{{ e.id }}">{{ e.subject_label or e.subject }}</a>
+      {%- if m.recorded_by != m.by %} <span class="snap">written down by {{ names[m.recorded_by] }}</span>{% endif %}
+    </td>
+    <td class="note">{{ (m.note or '') | truncate(90) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">Nothing has happened yet.</p>{% endif %}
+
+<p class="note"><a href="/board">&larr; back to the board</a></p>
+{% endblock %}
