@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from docket import refs
-from docket.auth import Identity, current_identity
+from docket.auth import Identity, current_identity, owner_only
 from docket.db.session import get_session
 from docket.models.identities import LocalIdentity
 
@@ -33,14 +33,6 @@ class IdentityIn(BaseModel):
         return v
 
 
-def _owner_only(identity: Identity) -> None:
-    if identity.via != "bearer":
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail="Only the owner registers principals; a principal cannot register itself",
-        )
-
-
 @router.put("/{uid}", status_code=status.HTTP_200_OK)
 async def register(
     uid: int,
@@ -48,7 +40,7 @@ async def register(
     session: AsyncSession = Depends(get_session),
     identity: Identity = Depends(current_identity),
 ) -> dict:
-    _owner_only(identity)
+    owner_only(identity)
     row = await session.get(LocalIdentity, uid)
     if row is None:
         row = LocalIdentity(uid=uid)
@@ -66,7 +58,7 @@ async def revoke(
 ) -> dict:
     """Revoke, never delete. The uid is not reused, so the row is worth keeping:
     a move made in the past should still resolve to who made it."""
-    _owner_only(identity)
+    owner_only(identity)
     row = await session.get(LocalIdentity, uid)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -80,7 +72,7 @@ async def listing(
     session: AsyncSession = Depends(get_session),
     identity: Identity = Depends(current_identity),
 ) -> list[dict]:
-    _owner_only(identity)
+    owner_only(identity)
     rows = (await session.execute(select(LocalIdentity).order_by(LocalIdentity.uid))).scalars()
     return [
         {"uid": r.uid, "party": r.party, "label": r.label, "revoked_at": r.revoked_at}

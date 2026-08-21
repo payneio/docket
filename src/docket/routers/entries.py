@@ -153,7 +153,10 @@ async def erase(
     Owner only, and it takes the moves with it: a move belongs to its entry, and
     half-deleting would leave a log about a conversation nobody can read.
     """
-    if identity.via != "bearer":
+    if not identity.is_operator:
+        # The flag, not the carrier. `via == "bearer"` meant "the owner" only
+        # while the owner's token was the only token; a credential arrives in
+        # the same header and must not inherit this.
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail="a party ends a conversation with a move, not by erasing it",

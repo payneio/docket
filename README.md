@@ -53,6 +53,37 @@ open http://localhost:9006/          # the board; it asks for DOCKET_TOKEN once
 
 `DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`, `DOCKET_UDS`.
 
+## How a party gets in
+
+Three ways, and they differ only in what the register can *know* about who is
+calling. Nothing here requires [fleetix](../fleetix), and nothing requires the
+caller to be on this machine.
+
+| | who vouches | `attested` |
+|---|---|---|
+| **unix socket** — a local account registered in `local_identities` | the kernel, via `SO_PEERCRED`; no credential is presented at all | `true` |
+| **a credential** — `Authorization: Bearer dk_…`, from anywhere | nobody; the holder says so | `false` |
+| **`DOCKET_TOKEN`** — the register's owner | nobody, and it is the only identity that reads past the parties on an entry | `false` |
+
+A credential names exactly one party and does nothing else: it cannot issue more,
+cannot register principals, cannot erase, and cannot see a conversation it is not
+named on. Issue one with:
+
+```bash
+curl -X POST https://docket.example/credentials -H "Authorization: Bearer $DOCKET_TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"party":"wild-life:person:<uuid>","label":"laptop assistant"}'
+```
+
+The token comes back **once** — only its hash is stored, so a lost credential is
+replaced, never recovered. `GET /credentials` lists them with `last_used_at`,
+which answers the one question worth asking before revoking something.
+
+**A credential is possession, not presence**, which is why its moves are never
+attested. A token proves somebody holds a secret; only the kernel, on this
+machine, proves a party was there. The register keeps testimony and evidence
+apart everywhere else and does not stop here.
+
 Tests use a database of their own (`docket_test`, or `DOCKET_TEST_DATABASE_URL`)
 and refuse to start against the register, so they are safe to run on a live box
 with the service up.
@@ -60,7 +91,9 @@ with the service up.
 ## The board
 
 `http://localhost:9006/` — what is waiting on you, what you are waiting on, and
-how long each has *actually* been stuck. Served by docket itself rather than by
+how long each has *actually* been stuck. Sign in with any token, not only the
+owner's: the board is the register's face rather than the owner's console, and it
+shows whoever is looking whatever is theirs. Served by docket itself rather than by
 wild-life, because the register must not require wild-life to be running and a
 surface that did would make that only half true. The cost is that a subject's
 label is a snapshot taken when the entry was made; the page says so.

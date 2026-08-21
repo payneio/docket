@@ -21,7 +21,7 @@ from fastapi import FastAPI
 
 from docket.config import settings
 from docket.peercred import PeerCredProtocol
-from docket.routers import board, entries, health, identities
+from docket.routers import board, credentials, entries, health, identities
 
 app = FastAPI(
     title="Docket",
@@ -31,6 +31,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(entries.router)
 app.include_router(identities.router)
+app.include_router(credentials.router)
 app.include_router(board.router)
 
 

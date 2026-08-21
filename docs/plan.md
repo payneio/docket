@@ -45,6 +45,12 @@ fleetix ─────► docket ─────► wild-life
  its principals an intention   nothing
 ```
 
+Since P10 the first arrow is optional as well as best-effort: a party can hold a
+credential instead of a unix account, so docket runs with no fleetix, no
+principals table and no accounts on the box at all. Peer credentials remain the
+*better* answer where they apply — they are the only ones the kernel vouches for
+— but they are no longer the only one.
+
 Corrections to the committed plan:
 
 1. **The fleetix arrow was backwards.** It said fleetix *publishes*
@@ -159,6 +165,30 @@ the token: the cookie *is* the credential, and signing it would only hide that.
 *Done when:* opening it shows the planner's unanswered question with its 27 hours
 on it. It did — and the question had been invisible for a day, which is the
 answer to the end-of-P2 checkpoint below.
+
+**P10 · A party without a box.** ✅ Done. Until now everything that was not on
+this machine authenticated with one shared secret that acted as the owner, so a
+second assistant could not be a second party — only the owner again. And the only
+way to *be* a party was a unix account, which ties docket to a single box and to
+fleetix provisioning it.
+
+`credentials` is the counterpart to `local_identities`: that table maps a unix
+account onto a party, this one maps a presented secret onto a party. Owner-issued,
+shown once, stored as a hash, revoked and never deleted. A credential names
+exactly one party and inherits nothing.
+
+The change that had to land first: **`is_operator` was `via != "peercred"`**,
+which was true of both cases that existed and would have quietly promoted every
+credential to reading the whole register, issuing more of itself, and erasing
+entries. It is an explicit field now. Two routes were also guarding on
+`via == "bearer"` as a stand-in for "the owner", which stopped being the same
+thing the moment a second kind of token could arrive in that header.
+
+Reached over Caddy at `docket.civil.payne.io`, so TLS is the proxy's; the board's
+session cookie is `Secure` when the request came over HTTPS and not when it came
+over loopback, because a `Secure` cookie on the loopback path is never sent back.
+*Done when:* a party that exists only as a token runs the whole loop from off-box
+and its moves are attributed to it and marked unattested. They are.
 
 **P5 · The wire.** A2A Agent Card and task lifecycle out; iTIP `VTODO` out,
 reusing the iMIP plumbing in `api/src/wild_life/mail/`. Two prerequisites belong

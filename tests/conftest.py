@@ -37,7 +37,7 @@ AGENT = "wild-life:person:11111111-1111-1111-1111-111111111111"
 AGENT_UID = 999001  # not a real account; only this suite registers it
 
 #: Tables in dependency order, for the truncate between tests.
-_TABLES = ("moves", "entries", "local_identities")
+_TABLES = ("moves", "entries", "local_identities", "credentials")
 
 
 def subject() -> str:

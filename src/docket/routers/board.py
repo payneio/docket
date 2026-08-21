@@ -26,9 +26,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from docket import service, states
-from docket.auth import SESSION_COOKIE, Identity, resolve_identity
-from docket.config import TEMPLATES_DIR, settings
+from docket.auth import SESSION_COOKIE, Identity, identify_token, resolve_identity
+from docket.config import TEMPLATES_DIR
 from docket.db.session import get_session
+from docket.models.credentials import Credential
 from docket.models.entries import Entry
 from docket.models.identities import LocalIdentity
 from docket.schemas.entries import EntryRead, MoveCreate
@@ -106,12 +107,27 @@ class _Names(dict):
 
 
 async def _names(session: AsyncSession, me: str) -> _Names:
+    """Whatever we have been told a party is called.
+
+    Both tables, because both name parties and neither is authoritative: a unix
+    principal has a label from `local_identities`, an assistant on another
+    machine has one from the credential it was issued, and a party with neither
+    keeps its URI. None of this makes docket a party registry — a label is a
+    convenience for reading a page, not a fact about anybody.
+    """
     names = _Names()
-    rows = (await session.execute(
-        select(LocalIdentity).where(LocalIdentity.label.isnot(None))
-    )).scalars()
-    for r in rows:
-        names[r.party] = r.label or ""
+    principals = (await session.execute(
+        select(LocalIdentity.party, LocalIdentity.label).where(
+            LocalIdentity.label.isnot(None), LocalIdentity.revoked_at.is_(None)
+        )
+    )).all()
+    holders = (await session.execute(
+        select(Credential.party, Credential.label).where(
+            Credential.label.isnot(None), Credential.revoked_at.is_(None)
+        )
+    )).all()
+    for party, label in [*principals, *holders]:
+        names[party] = label
     names[me] = "you"
     return names
 
@@ -152,17 +168,31 @@ async def favicon_ico() -> Response:
 
 
 @router.post("/board/sign-in", include_in_schema=False)
-async def sign_in(request: Request, token: str = Form("")) -> Response:
-    if token != settings.token:
-        return _sign_in(request, "That is not the register's token.")
+async def sign_in(
+    request: Request, token: str = Form(""), session: AsyncSession = Depends(get_session)
+) -> Response:
+    """Any credential, not only the owner's.
+
+    A party with a token of its own signs in and sees its own two piles. That is
+    the property this project exists to protect showing up in the furniture: the
+    board is not the owner's console that others may borrow, it is the register's
+    face, and it shows whoever is looking whatever is theirs.
+    """
+    if token and await identify_token(session, token, "cookie") is None:
+        return _sign_in(request, "That token does not name a party here.")
+    if not token:
+        return _sign_in(request, "A token is needed.")
     response = RedirectResponse("/board", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         SESSION_COOKIE, token,
         httponly=True,      # no script reads it
         samesite="strict",  # no other site posts a move with it
         max_age=60 * 60 * 24 * 30,
-        # Not `secure`: this is loopback, and setting it would mean the cookie is
-        # never sent at all. If the board is ever put behind TLS this must change.
+        # Only over HTTPS, and it must be conditional rather than always-on: the
+        # register is reached both through Caddy at docket.civil.payne.io and
+        # directly on loopback, and a `Secure` cookie on the loopback path would
+        # simply never be sent back.
+        secure=request.url.scheme == "https",
     )
     return response
 
