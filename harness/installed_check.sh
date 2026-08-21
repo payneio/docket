@@ -47,7 +47,11 @@ MV=$(curl -s $D/entries/$EID -H "$A" | jq -r '[.moves[].move]|join(",")')
 
 WS="$WSDIR/test-mark-task-newbox"
 [ -f "$WS/AGENTS.md" ] && ok "instructions written into the workspace" || bad "no AGENTS.md"
-grep -q "outcome.json" "$WS/AGENTS.md" && ok "carried inside the single file" || bad "instructions empty"
+grep -q '```outcome' "$WS/AGENTS.md" && ok "carried inside the single file" || bad "instructions empty"
+# The floor has to be in the bundle, or an assistant with no filesystem the
+# runner can see would have no way to answer from an installed box.
+grep -q "response_outcome()" "$BIN/docket-echo" && ok "and the reply parser came with it" || bad "no response_outcome in the bundle"
+grep -q "write_outcome_tool()" "$BIN/docket-echo" && ok "and the MCP tool" || bad "no tool in the bundle"
 
 echo "== second run reuses the saved credential, ticket already spent"
 env -i PATH="$PATH" HOME="$HOMEDIR" DOCKET_URL=$D \
