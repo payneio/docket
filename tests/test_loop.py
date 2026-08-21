@@ -167,7 +167,13 @@ async def test_a_move_a_party_makes_itself_is_attested(owner, agent):
 
 
 async def test_a_stranger_cannot_record_moves_for_others(owner, agent):
-    """Recording on someone's behalf is a privilege of being in the conversation."""
+    """Recording on someone's behalf is a privilege of being in the conversation.
+
+    The refusal is a 404 rather than a 403, and it comes from reading rather than
+    from moving: a stranger does not get to learn that the entry exists. Saying
+    "that is not yours" would already say somebody owes somebody something, which
+    is the whole of what the register holds.
+    """
     e = await _offer(owner)
     from tests.conftest import AsyncSessionLocal, LocalIdentity
     async with AsyncSessionLocal() as s:
@@ -181,9 +187,84 @@ async def test_a_stranger_cannot_record_moves_for_others(owner, agent):
             r = await stranger.post(
                 f"/entries/{e['id']}/moves", json={"move": "accept", "on_behalf_of": AGENT}
             )
-            assert r.status_code == 403
+            assert r.status_code == 404
     finally:
         from sqlalchemy import text
         async with AsyncSessionLocal() as s:
             await s.execute(text("DELETE FROM docket.local_identities WHERE uid = 999002"))
             await s.commit()
+
+
+async def test_a_party_to_nothing_sees_nothing(owner, agent):
+    """Before this, any authenticated caller could read the whole register.
+
+    Three agents share this machine and a registered uid is trivially come by,
+    so "you may not move it" was never the same protection as "you may not see
+    it". The listing scopes and the fetch 404s.
+    """
+    from tests.conftest import AsyncSessionLocal, LocalIdentity, client_as
+
+    e = await _offer(owner, terms="not the stranger's business")
+    stranger_party = "wild-life:person:33333333-3333-3333-3333-333333333333"
+    async with AsyncSessionLocal() as s:
+        s.add(LocalIdentity(uid=999003, party=stranger_party, label="uninvolved"))
+        await s.commit()
+
+    async with client_as(999003) as stranger:
+        assert (await stranger.get("/entries")).json() == []
+        assert (await stranger.get(f"/entries/{e['id']}")).status_code == 404
+
+    # The delegate, who is a party, sees exactly the one.
+    assert [x["id"] for x in (await agent.get("/entries")).json()] == [e["id"]]
+
+
+async def test_accountable_reads_and_still_does_not_move(owner, agent):
+    """Answering for an outcome you cannot see is not accountability. Being able
+    to see a conversation is still not being in it, so the moves stay empty."""
+    from tests.conftest import AsyncSessionLocal, LocalIdentity, client_as
+
+    boss = "wild-life:person:44444444-4444-4444-4444-444444444444"
+    e = await _offer(owner, accountable=boss)
+    async with AsyncSessionLocal() as s:
+        s.add(LocalIdentity(uid=999004, party=boss, label="accountable"))
+        await s.commit()
+
+    async with client_as(999004) as watcher:
+        got = (await watcher.get(f"/entries/{e['id']}")).json()
+        assert got["id"] == e["id"]
+        assert got["your_role"] is None and got["available_moves"] == []
+        r = await watcher.post(f"/entries/{e['id']}/moves", json={"move": "accept"})
+        assert r.status_code == 409
+
+
+async def test_two_moves_at_once_give_one_answer_and_one_conflict(owner, agent):
+    """The entry row is locked for the move, so the second mover waits and then
+    reads the state the first one left. Without the lock both read `offered`,
+    both allow the accept, and both write seq 2 — a 500 on the unique index, or
+    a lost state write, depending on who commits first."""
+    import asyncio
+
+    e = await _offer(owner)
+    both = await asyncio.gather(
+        agent.post(f"/entries/{e['id']}/moves", json={"move": "accept"}),
+        agent.post(f"/entries/{e['id']}/moves", json={"move": "accept"}),
+    )
+    assert sorted(r.status_code for r in both) == [200, 409]
+
+    final = (await owner.get(f"/entries/{e['id']}")).json()
+    assert final["state"] == "accepted"
+    assert [m["seq"] for m in final["moves"]] == [1, 2]
+
+
+async def test_a_self_offer_is_refused(owner):
+    """It is an intention, and intentions live in the system that authored them."""
+    r = await owner.post("/entries", json={"subject": subject(), "delegate": owner_party()})
+    assert r.status_code == 400 and "self-offer" in r.json()["detail"]
+
+
+async def test_the_listing_is_bounded(owner, agent):
+    for _ in range(3):
+        await _offer(owner)
+    assert len((await owner.get("/entries", params={"limit": 2})).json()) == 2
+    assert len((await owner.get("/entries", params={"limit": 2, "offset": 2})).json()) == 1
+    assert (await owner.get("/entries", params={"limit": 9999})).status_code == 422

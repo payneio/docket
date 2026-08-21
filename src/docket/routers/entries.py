@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from docket import states
@@ -28,6 +28,31 @@ def _role(entry: Entry, party: str) -> str | None:
     if entry.delegate is not None and party == entry.delegate:
         return "delegate"
     return None
+
+
+def _may_read(entry: Entry, identity: Identity) -> bool:
+    """Whether this caller may see this entry at all.
+
+    Being *accountable* reads and still does not move. The two questions are
+    different: answering for an outcome you cannot see is not accountability,
+    and being able to see a conversation is not being in it. `_role` above stays
+    the narrower answer, and it is the one the transition table is asked.
+    """
+    if identity.is_operator:
+        return True
+    return identity.party in (entry.requester, entry.delegate, entry.accountable)
+
+
+def _scope(stmt: Select[tuple[Entry]], identity: Identity) -> Select[tuple[Entry]]:
+    """The same rule as `_may_read`, pushed into SQL so a listing does not read
+    the whole register and then throw most of it away."""
+    if identity.is_operator:
+        return stmt
+    return stmt.where(
+        (Entry.requester == identity.party)
+        | (Entry.delegate == identity.party)
+        | (Entry.accountable == identity.party)
+    )
 
 
 def _read(entry: Entry, party: str) -> EntryRead:
@@ -78,6 +103,15 @@ async def offer(
     identity: Identity = Depends(current_identity),
 ) -> EntryRead:
     """Ask someone to discharge something. The offer *is* the entry's creation."""
+    if payload.delegate == identity.party:
+        # Something you owe yourself is an intention, and intentions live in the
+        # system that authored them. `docs/plan.md` found 443 of 446 wild-life
+        # assignments were Paul to Paul, which is what this being expressible
+        # costs: a register full of rows that say nothing about anybody.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="a self-offer is not an offer; that is an intention, not an assignment",
+        )
     after = states.apply(None, "offer", "requester")  # the caller is the requester by definition
     entry = Entry(
         subject=payload.subject,
@@ -108,8 +142,12 @@ async def list_entries(
     subject: str | None = Query(None),
     parent_id: uuid.UUID | None = Query(None, description="the children of a redirected entry"),
     open_only: bool = Query(True, description="exclude ended conversations"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[EntryRead]:
-    stmt = select(Entry)
+    """Entries you are a party to. The owner of the register sees all of them;
+    nobody else sees a conversation they are not named on."""
+    stmt = _scope(select(Entry), identity)
     if party:
         stmt = stmt.where((Entry.requester == party) | (Entry.delegate == party))
     if subject:
@@ -118,7 +156,7 @@ async def list_entries(
         stmt = stmt.where(Entry.parent_id == parent_id)
     if open_only:
         stmt = stmt.where(Entry.state.notin_(tuple(states.TERMINAL)))
-    stmt = stmt.order_by(Entry.updated_at.desc())
+    stmt = stmt.order_by(Entry.updated_at.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()
     return [_read(e, identity.party) for e in rows]
 
@@ -130,7 +168,10 @@ async def get_entry(
     identity: Identity = Depends(current_identity),
 ) -> EntryRead:
     entry = await session.get(Entry, entry_id)
-    if entry is None:
+    # 404 and not 403: telling a stranger that an entry exists but is not theirs
+    # tells them somebody owes somebody something, which is the fact the
+    # register holds. There is nothing left to protect after that.
+    if entry is None or not _may_read(entry, identity):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
     return _read(entry, identity.party)
 
@@ -149,8 +190,14 @@ async def make_move(
     accepted" is a fact about where the conversation stands, not a malformed
     request.
     """
-    entry = await session.get(Entry, entry_id)
-    if entry is None:
+    # Locked for the length of the transaction. Without it two movers each read
+    # the state, each decide their move is legal, and each write `max(seq) + 1`:
+    # either they collide on ix_moves_entry_seq -- a 500, where the honest answer
+    # is 409 -- or one party's state write disappears under the other's. Three
+    # writers make this reachable rather than theoretical: two agents on a timer
+    # and a person at the board.
+    entry = await session.get(Entry, entry_id, with_for_update=True)
+    if entry is None or not _may_read(entry, identity):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
 
     # Whose move is this? Normally the caller's. A party may also write down the
@@ -172,8 +219,15 @@ async def make_move(
     except states.Refused as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
 
-    if payload.move == "redirect" and not payload.to:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="redirect needs `to`")
+    if payload.move == "redirect":
+        if not payload.to:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="redirect needs `to`")
+        if payload.to == mover:
+            # The child would be an offer to yourself, which `offer` refuses for
+            # the same reason. Handing work to yourself is not handing it on.
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail="cannot redirect to yourself"
+            )
     if payload.terms is not None:
         entry.terms = payload.terms
     if payload.expected_by is not None:

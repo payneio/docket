@@ -35,6 +35,17 @@ class Identity:
         """True when the kernel vouched for this, rather than the caller."""
         return self.via == "peercred"
 
+    @property
+    def is_operator(self) -> bool:
+        """Presented the register's own secret rather than being vouched for.
+
+        This is the party that owns the register, and the only one that reads
+        past the two parties named on an entry. A principal never is one: it
+        arrives over the socket, and what the kernel says about it is exactly
+        who it is and no more.
+        """
+        return self.via != "peercred"
+
 
 def _peer_uid(request: Request) -> int | None:
     client = request.scope.get("client")
