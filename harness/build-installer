@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Generate harness/install.sh, with every source embedded.
+#
+# The installer has to work when it arrives down a pipe with nothing else, which
+# rules out fetching its own pieces: a half-fetched install is a worse failure
+# than a large file. So the sources are inlined here, and `scripts/check.sh`
+# fails if the result is stale -- a generated file nobody regenerates is how a
+# repository comes to ship something that no longer matches it.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+emit() {  # <marker> <file>
+  printf '%s() { cat <<'"'"'%s'"'"'\n' "$1" "EOF_$1"
+  cat "$2"
+  printf '%s\n}\n\n' "EOF_$1"
+}
+
+{
+  cat installer-head.sh
+  emit src_lib      lib.sh
+  emit src_runner   runner
+  emit src_agents   AGENTS.md
+  # `echo` ships too. It runs no assistant, so a new box can prove it reaches
+  # the register and acts as the right party before anybody spends a token on
+  # finding out.
+  for w in wrappers/*; do
+    emit "src_wrapper_$(basename "$w" | tr -cd 'a-zA-Z0-9')" "$w"
+  done
+  cat installer-tail.sh
+} > install.sh
+chmod +x install.sh
+echo "wrote install.sh ($(wc -l < install.sh) lines)"

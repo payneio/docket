@@ -3,12 +3,53 @@
 : "${DOCKET_URL:=http://127.0.0.1:9006}"
 : "${DK_CRED:=$HOME/.docket/credential}"
 
+#: The credential, from the environment or from a file.
+#:
+#: `DOCKET_API_KEY` first, because a new box is one `export` away from working
+#: and a file is a thing to create, own and forget. If it turns out to be a
+#: ticket (`dke_`) it is spent for a real credential on first use -- so a single
+#: variable either *is* the identity or *buys* it, and nothing has to know which
+#: in advance.
+docket_credential() {
+  local key="${DOCKET_API_KEY:-}"
+  if [ -z "$key" ] && [ -s "${DOCKET_CREDENTIAL_FILE:-$HOME/.docket/credential}" ]; then
+    key="$(cat "${DOCKET_CREDENTIAL_FILE:-$HOME/.docket/credential}")"
+  fi
+  case "$key" in
+    dke_*) key="$(docket_enrol "$key")" ;;
+  esac
+  printf '%s' "$key"
+}
+
+#: Spend a ticket, keep what comes back. Once, and then never again -- the
+#: credential is written where the next run will find it without the ticket.
+docket_enrol() {  # <ticket>
+  local file out token
+  file="${DOCKET_CREDENTIAL_FILE:-$HOME/.docket/credential}"
+  if [ -s "$file" ]; then cat "$file"; return; fi
+  out="$(curl -s -X POST "$DOCKET_URL/enrol" -H "Authorization: Bearer $1" \
+         -H 'Content-Type: application/json' \
+         -d "$(jq -nc --arg l "${HARNESS_LABEL:-$(hostname -s)}" '{label:$l}')")"
+  token="$(printf '%s' "$out" | jq -r '.token // empty')"
+  if [ -z "$token" ]; then
+    printf 'could not enrol: %s\n' "$out" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$file")" && chmod 700 "$(dirname "$file")"
+  ( umask 077; printf '%s' "$token" > "$file" )
+  printf 'enrolled as %s\n' "$(printf '%s' "$out" | jq -r .party)" >&2
+  printf '%s' "$token"
+}
+
 ts() { date -Is; }
 log() { printf '%s %s\n' "$(ts)" "$*" >&2; }
 
-#: Every call carries the credential; nothing else identifies us.
+#: Every call carries the credential; nothing else identifies us. Resolved once
+#: per process, because enrolling twice would mint two credentials for one agent.
+DOCKET_KEY=""
 dk() {
-  curl -s -H "Authorization: Bearer $(cat "$DK_CRED" 2>/dev/null)" \
+  [ -z "$DOCKET_KEY" ] && DOCKET_KEY="$(docket_credential)"
+  curl -s -H "Authorization: Bearer $DOCKET_KEY" \
        -H 'Content-Type: application/json' "$@"
 }
 
@@ -70,3 +111,26 @@ result_of() {
 #: A well-formed refusal, so a wrapper that dies mid-run still says something the
 #: register can hold. Silence is the failure the whole design is arranged against.
 failed_result() { jq -nc --arg n "$1" '{outcome:"failed", note:$n}'; }
+
+#: What the assistant said its own outcome was, if it said.
+#:
+#: `AGENTS.md` tells it to write `.harness/outcome.json` before stopping. That is
+#: worth far more than reading its prose for the word "blocked": an assistant
+#: asked to state an outcome states one, and an assistant guessed at is guessed
+#: at wrong eventually. Every one of these tools can write a file, which is the
+#: only capability this convention assumes.
+#:
+#: Consumed, not just read. A stale outcome from last week's run reported as this
+#: run's would be worse than having none.
+declared_outcome() {  # <workspace>
+  local f="$1/.harness/outcome.json"
+  [ -s "$f" ] || return 1
+  if jq -e '.outcome | test("^(delivered|progressed|blocked|declined|failed)$")' "$f" >/dev/null 2>&1; then
+    jq -c '{outcome, note: (.note // ""), question: (.question // "")}' "$f"
+    rm -f "$f"
+    return 0
+  fi
+  printf 'ignoring an outcome file that is not one: %s\n' "$(head -c 200 "$f")" >&2
+  rm -f "$f"
+  return 1
+}

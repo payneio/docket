@@ -90,6 +90,26 @@ convention. The runner stores nothing on a wrapper's behalf, which is what lets
 `pi` store nothing at all: it can derive a stable session id from the subject and
 let its own `--session-id` do the work.
 
+## What the assistant is told
+
+`AGENTS.md` is copied into every workspace on every run (and as `CLAUDE.md`,
+since not every tool follows a symlink out of a directory). It says one thing
+that matters: **write `.harness/outcome.json` before stopping.**
+
+```json
+{ "outcome": "blocked",
+  "note": "Cannot pick a schema without knowing the retention rule.",
+  "question": "Delete old rows after 90 days, or archive them?" }
+```
+
+Without it a wrapper has to read the assistant's prose for the word "blocked",
+which works until it doesn't and then fails silently in the expensive direction.
+With it, `declined` becomes something an assistant can actually say — and the
+whole arrangement exists so that refusing is sayable.
+
+Wrappers consume the file, so a stale one cannot be read as this run's answer,
+and the runner clears it before each run in case a wrapper died before it could.
+
 ## Verifiers
 
 `docs/protocol.md`: *delivering is a claim about the world, so the runner checks
@@ -101,15 +121,53 @@ verifier's reason, and the entry stays yours.
 Unset, nothing is checked and the wrapper is believed. `verifiers/wild-life`
 does what the old runner hardcoded for everybody.
 
-## Running one
+## Putting one on a new box
 
 ```bash
-DOCKET_URL=http://127.0.0.1:9006 \
-DK_CRED=$HOME/.docket/credential \
+curl -fsSL <url>/harness/install.sh | bash -s -- --harness claude-code
+export DOCKET_URL=https://docket.example
+export DOCKET_API_KEY=dke_…        # a ticket, from /board/access
+docket-claude
+```
+
+`--harness` takes `claude-code`, `pi`, `opencode`, `amplifier`, or `echo`.
+`--dir` chooses where (default `~/.local/bin`), `--name` what to call it,
+`--list` shows what is available.
+
+It writes **one executable** containing the runner, the library, the wrapper and
+the instructions. It re-executes itself to invoke the wrapper, so the subprocess
+contract is unchanged — the subprocess is the same file wearing a different hat.
+Nothing points back at a checkout.
+
+`--harness echo` runs no assistant. It is how a new box proves it can reach the
+register and act as the right party before anybody spends a token finding out.
+
+`install.sh` is **generated** by `build-installer`, which embeds the sources —
+an installer that fetched its own pieces could arrive half-installed, which is a
+worse failure than a large file. `scripts/check.sh` regenerates and diffs it, so
+it cannot quietly stop matching the sources beside it.
+
+## Running one
+
+From a checkout, without installing:
+
+```bash
+DOCKET_URL=https://docket.example \
+DOCKET_API_KEY=dk_… \
 HARNESS_WRAPPER=$PWD/harness/wrappers/claude \
-HARNESS_WORKSPACES=$HOME/workspaces \
   harness/runner
 ```
 
+`DOCKET_API_KEY` may be a credential (`dk_…`) or a **ticket** (`dke_…`). Given a
+ticket it is spent once for a credential, which is written to
+`DOCKET_CREDENTIAL_FILE` (default `~/.docket/credential`) and used from then on.
+So one variable either *is* the identity or *buys* it, and a new box does not
+need to know which.
+
 Every knob is an environment variable and every component is a path, so
 substituting an assistant is a different `HARNESS_WRAPPER` and nothing else.
+
+```
+./harness/harness_check.sh     the loop, with no model and no waiting
+./harness/installed_check.sh   the generated bundle, on a simulated new box
+```

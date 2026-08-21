@@ -38,4 +38,8 @@ printf '%s\n' "$OUT" >&2
 SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null | head -c 400)"
 [ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
 
+if DECLARED="$(declared_outcome "$WS")"; then
+  printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
 jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

@@ -37,8 +37,8 @@ CRED=$(curl -s -X POST $D/credentials -H "$A" -H 'Content-Type: application/json
 [ -z "$CRED" ] && { echo "could not issue a credential"; exit 1; }
 
 export HARNESS_STATE=$(mktemp -d) HARNESS_WORKSPACES=$(mktemp -d)
-export DOCKET_URL=$D DK_CRED="$HARNESS_STATE/cred"
-printf '%s' "$CRED" > "$DK_CRED"
+export DOCKET_URL=$D DOCKET_CREDENTIAL_FILE="$HARNESS_STATE/cred"
+printf '%s' "$CRED" > "$DOCKET_CREDENTIAL_FILE"
 export HARNESS_WRAPPER=/data/repos/docket/harness/wrappers/echo
 
 fail=0
@@ -90,6 +90,38 @@ HARNESS_ECHO_OUTCOME=delivered ./harness/runner >/dev/null 2>&1
 [ "$(state $E5)" = "accepted" ] && ok "not delivered on the wrapper's word alone" || bad "state: $(state $E5)"
 printf '%s' "$(lastnote $E5)" | grep -q "world disagrees" && ok "carried the reason" || bad "note: $(lastnote $E5)"
 unset HARNESS_VERIFIER
+
+echo "== the assistant is told how to declare an outcome"
+[ -f "$WS/AGENTS.md" ] && [ -f "$WS/CLAUDE.md" ] && ok "instructions in the workspace" || bad "no AGENTS.md in $WS"
+grep -q "outcome.json" "$WS/AGENTS.md" && ok "and they say to write outcome.json" || bad "instructions say nothing about it"
+
+echo "== a declared outcome is taken over a guess"
+E7=$(offer seven "will declare")
+W7="$HARNESS_WORKSPACES/$(printf 'test:mark:task:seven' | tr -c 'a-zA-Z0-9._-' '-' | tr -s '-')"
+mkdir -p "$W7/.harness"
+cat > "$HARNESS_STATE/declaring" <<'W'
+#!/usr/bin/env bash
+. /data/repos/docket/harness/lib.sh
+REQ="$(cat)"; WS="$(printf '%s' "$REQ" | jq -r .workspace)"
+mkdir -p "$WS/.harness"
+printf '{"outcome":"declined","note":"not mine to do"}' > "$WS/.harness/outcome.json"
+if D="$(declared_outcome "$WS")"; then printf '%s' "$D"; else jq -nc '{outcome:"progressed",note:"guessed"}'; fi
+W
+chmod +x "$HARNESS_STATE/declaring"
+HARNESS_WRAPPER="$HARNESS_STATE/declaring" ./harness/runner >/dev/null 2>&1
+[ "$(moves $E7)" = "offer,decline" ] && ok "declined because it said so" || bad "moves: $(moves $E7)"
+[ ! -f "$W7/.harness/outcome.json" ] && ok "outcome consumed, not left to be reread" || bad "outcome file survived"
+
+echo "== a ticket in DOCKET_API_KEY buys a credential"
+TICKET=$(curl -s -X POST $D/enrolments -H "$A" -H 'Content-Type: application/json' \
+  -d "{\"party\":\"$AGENT\",\"label\":\"by ticket\"}" | jq -r .token)
+E8=$(offer eight "via a ticket")
+NEWCRED="$HARNESS_STATE/fresh-box"
+( unset DOCKET_CREDENTIAL_FILE
+  DOCKET_API_KEY="$TICKET" DOCKET_CREDENTIAL_FILE="$NEWCRED" \
+  HARNESS_ECHO_OUTCOME=progressed ./harness/runner >/dev/null 2>&1 )
+[ -s "$NEWCRED" ] && grep -q '^dk_' "$NEWCRED" && ok "enrolled and saved the credential" || bad "no credential written"
+[ "$(moves $E8)" = "offer,accept,update" ] && ok "and worked in the same run" || bad "moves: $(moves $E8)"
 
 echo "== and delivers when nothing disagrees"
 E6=$(offer six "really done")

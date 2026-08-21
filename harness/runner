@@ -30,6 +30,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${HARNESS_WORKSPACES:=$HOME/workspaces}"
 : "${HARNESS_STATE:=$HOME/.harness}"
 : "${HARNESS_VERIFIER:=}"
+: "${HARNESS_AGENTS_MD:=$HERE/AGENTS.md}"
 NAME="$(basename "$HARNESS_WRAPPER")"
 
 mkdir -p "$HARNESS_STATE/logs" "$HARNESS_WORKSPACES" || exit 1
@@ -92,13 +93,29 @@ while read -r entry; do
   state="$(printf '%s' "$entry" | jq -r '.state')"
 
   ws="$HARNESS_WORKSPACES/$(workspace_slug "$subject")"
-  mkdir -p "$ws" || { log "$NAME cannot make $ws"; continue; }
+  mkdir -p "$ws/.harness" || { log "$NAME cannot make $ws"; continue; }
+
+  # The instructions go in every workspace, refreshed each run so an edit to
+  # them reaches every agent without anybody redeploying anything. They are how
+  # an assistant knows to declare its outcome instead of being guessed at, and
+  # `CLAUDE.md` is a copy rather than a symlink because not every tool follows
+  # one out of a directory it was told to work in.
+  if declare -F write_agents_md >/dev/null 2>&1; then
+    write_agents_md "$ws/AGENTS.md"          # bundled: carried inside this file
+    cp -f "$ws/AGENTS.md" "$ws/CLAUDE.md" 2>/dev/null
+  elif [ -n "${HARNESS_AGENTS_MD:-}" ] && [ -f "$HARNESS_AGENTS_MD" ]; then
+    cp -f "$HARNESS_AGENTS_MD" "$ws/AGENTS.md" 2>/dev/null
+    cp -f "$HARNESS_AGENTS_MD" "$ws/CLAUDE.md" 2>/dev/null
+  fi
+  # Never carry an outcome across runs: the wrapper consumes it, but a wrapper
+  # that died before reading one would leave it to be read as this run's answer.
+  rm -f "$ws/.harness/outcome.json"
 
   request="$(execution_request "$entry" "$ws" "$ME")"
   runlog="$HARNESS_STATE/logs/$(date +%Y%m%d-%H%M%S)-${eid:0:8}.log"
 
   log "$NAME -> $NAME wrapper for ${eid:0:8} ($state) in $ws"
-  out="$(printf '%s' "$request" | "$HARNESS_WRAPPER" 2>>"$runlog")"
+  out="$(printf '%s' "$request" | HARNESS_ROLE=wrapper "$HARNESS_WRAPPER" 2>>"$runlog")"
   rc=$?
   result="$(result_of "$out")"
   # A wrapper that died, or printed something that is not a result, still has to

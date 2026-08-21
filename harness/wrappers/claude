@@ -52,10 +52,18 @@ fi
 SUMMARY="$(printf '%s' "$OUT" | jq -r '.result // empty' 2>/dev/null | head -c 400)"
 [ -z "$SUMMARY" ] && SUMMARY="ran, but said nothing a summary could be made of"
 
-# Claude has no structured "I am blocked" signal, so this reads its own words for
-# one. It is a heuristic and it is allowed to be wrong in the safe direction:
-# a missed blocker is reported as progress, which leaves the work ours and the
-# register honest about there being no progress.
+# What it said its outcome was, if it said. AGENTS.md in the workspace asks for
+# `.harness/outcome.json`, and an assistant asked to state an outcome states one.
+if DECLARED="$(declared_outcome "$WS")"; then
+  # Its own note is better than ours; keep the summary only if it left none.
+  printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+
+# It did not say. Read its prose for a blocker rather than reporting progress
+# that may not have happened -- a heuristic, and allowed to be wrong only in the
+# safe direction: a missed blocker becomes `progressed`, which leaves the work
+# ours and leaves the register honest that nothing moved.
 if printf '%s' "$SUMMARY" | grep -qiE "need(s)? (a )?(decision|input|clarif)|blocked|cannot proceed|unable to proceed"; then
   jq -nc --arg n "$SUMMARY" '{outcome:"blocked", note:$n, question:$n}'
 else
