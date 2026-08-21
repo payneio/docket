@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# amplifier-agent — the engine, not the `amplifier` CLI beside it. They are
+# different programs; this is the one built to be driven.
+#
+# Continuation: **caller-chosen id plus an explicit resume**, which is the best
+# arrangement of the four here. `--session-id` is ours to pick, so it is derived
+# from the subject and never stored; `--resume` says whether to continue the
+# transcript, so a first run and a tenth differ by one flag and no bookkeeping
+# beyond "have we been here".
+#
+# Its own docs describe this host exactly: "a subprocess host typically writes
+# one file per agent instance and passes --config <path> on every turn". So the
+# config, the MCP server and the skills all live in the workspace, which means
+# an agent's whole configuration moves with its work and nothing is left behind
+# on a machine when the work goes elsewhere.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+SUBJECT="$(printf '%s' "$REQ" | jq -r '.entry.subject')"
+STATE="$WS/.harness/amplifier-agent"; mkdir -p "$STATE"
+
+SESSION_ID="docket-$(printf '%s' "$SUBJECT" | sha256sum | cut -c1-24)"
+
+# The outcome tool, over MCP. The engine takes a path to an MCP file rather than
+# inline JSON, so it is written beside the config it is named in.
+CONFIG="$STATE/host-config.json"
+MCP_FILE="$STATE/mcp.json"
+TOOL="$(install_outcome_tool "$WS" || true)"
+if [ -n "$TOOL" ]; then
+  jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
+    '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}' > "$MCP_FILE"
+fi
+
+# The top level of this file is closed -- an unknown key is an error rather than
+# a warning -- so it is built from exactly the keys the engine documents, and
+# `mcp` is omitted entirely when there is no tool to point at.
+jq -nc --arg mcp "$MCP_FILE" --arg tool "$TOOL" \
+  --arg provider "${AMPLIFIER_PROVIDER:-}" --arg model "${AMPLIFIER_MODEL:-}" '
+  {approval: {mode: "yes"}}
+  + (if $tool == "" then {} else {mcp: {configPath: $mcp}} end)
+  + (if $provider == "" then {} else
+      {provider: ({module: $provider}
+        + (if $model == "" then {} else {config: {default_model: $model}} end))}
+     end)' > "$CONFIG"
+
+ARGS=(run -y --session-id "$SESSION_ID" --cwd "$WS" --config "$CONFIG"
+      --output json --display ndjson)
+[ -n "${AMPLIFIER_AGENT_MODE:-}" ] && ARGS+=(--mode "$AMPLIFIER_AGENT_MODE")
+# `--resume` is a flag over a saved transcript, not an id, so whether we have
+# been here is the only thing worth remembering.
+[ -f "$STATE/ran" ] && ARGS+=(--resume)
+
+OUT="$(amplifier-agent "${ARGS[@]}" "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
+if [ $RC -ne 0 ] && [ -f "$STATE/ran" ]; then
+  echo "resume failed ($RC); starting the session over" >&2
+  RETRY=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && continue; RETRY+=("$a"); done
+  OUT="$(amplifier-agent "${RETRY[@]}" --fresh "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+touch "$STATE/ran"
+
+[ $RC -ne 0 ] && { failed_result "amplifier-agent exited $RC"; exit 0; }
+
+# Stdout is one envelope line, and the streams are strictly separated, so this
+# needs none of the guessing the other wrappers do about where a summary lives.
+ERR="$(printf '%s' "$OUT" | jq -r '.error // empty' 2>/dev/null)"
+[ -n "$ERR" ] && { failed_result "$(printf '%s' "$ERR" | head -c 300)"; exit 0; }
+SUMMARY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null | head -c 400)"
+
+if DECLARED="$(declared_outcome "$WS")"; then
+  printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

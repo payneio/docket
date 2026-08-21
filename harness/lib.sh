@@ -134,3 +134,21 @@ declared_outcome() {  # <workspace>
   rm -f "$f"
   return 1
 }
+
+#: Put the outcome tool where the assistant's config can point at it.
+#:
+#: Written into the workspace rather than assumed to be beside us, because the
+#: installed runner is one file and has no repository behind it. `write_tool` is
+#: defined by the bundle; from a checkout the file is simply copied.
+install_outcome_tool() {  # <workspace> -> path, or nothing
+  local dest="$1/.harness/report-outcome"
+  mkdir -p "$1/.harness" || return 1
+  if declare -F write_outcome_tool >/dev/null 2>&1; then
+    write_outcome_tool "$dest"
+  elif [ -f "${HARNESS_TOOL_SRC:-}" ]; then
+    cp -f "$HARNESS_TOOL_SRC" "$dest"
+  else
+    return 1
+  fi
+  chmod +x "$dest" && printf '%s' "$dest"
+}

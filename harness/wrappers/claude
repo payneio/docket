@@ -20,8 +20,32 @@ SESSION_FILE="$STATE/session"
 PROMPT="$(default_prompt "$REQ")"
 ARGS=(-p "$PROMPT" --output-format json --permission-mode acceptEdits --max-turns "${CLAUDE_MAX_TURNS:-40}")
 [ -n "${CLAUDE_MODEL:-}" ] && ARGS+=(--model "$CLAUDE_MODEL")
-[ -n "${CLAUDE_MCP_CONFIG:-}" ] && ARGS+=(--mcp-config "$CLAUDE_MCP_CONFIG" --strict-mcp-config)
-[ -n "${CLAUDE_ALLOWED_TOOLS:-}" ] && ARGS+=(--allowedTools "$CLAUDE_ALLOWED_TOOLS")
+
+# The outcome tool, offered over MCP. An assistant asked to call a tool calls it
+# far more reliably than one asked to remember a file on its way out -- and an
+# invalid call comes back refused, with a reason, in time for it to fix.
+#
+# Merged with whatever the operator configured rather than replacing it: this is
+# one small server, and clobbering somebody's task tools to add it would be a
+# poor trade. `--allowedTools` is not optional when `--strict-mcp-config` is on:
+# without it the run reaches the model, discovers it may not call the tool,
+# explains that politely, and exits 0 -- which is how every tick came to re-do
+# the same nothing before that flag existed.
+TOOL="$(install_outcome_tool "$WS" || true)"
+MCP="${CLAUDE_MCP_CONFIG:-}"
+ALLOWED="${CLAUDE_ALLOWED_TOOLS:-}"
+if [ -n "$TOOL" ]; then
+  OURS="$(jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
+    '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}')"
+  if [ -n "$MCP" ]; then
+    MCP="$(jq -sc '.[0] * .[1]' <(printf '%s' "$MCP") <(printf '%s' "$OURS"))"
+  else
+    MCP="$OURS"
+  fi
+  ALLOWED="${ALLOWED:+$ALLOWED,}mcp__harness"
+fi
+[ -n "$MCP" ] && ARGS+=(--mcp-config "$MCP" --strict-mcp-config)
+[ -n "$ALLOWED" ] && ARGS+=(--allowedTools "$ALLOWED")
 
 # Resume if we have been here before, and fall back to a fresh session if the id
 # is stale. A session that has expired must not become a task that never runs.
@@ -34,8 +58,8 @@ OUT="$(claude "${ARGS[@]}" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting a fresh session" >&2
   rm -f "$SESSION_FILE"
-  OUT="$(claude -p "$PROMPT" --output-format json --permission-mode acceptEdits \
-         --max-turns "${CLAUDE_MAX_TURNS:-40}" 2>&1)"; RC=$?
+  FRESH=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && break; FRESH+=("$a"); done
+  OUT="$(claude "${FRESH[@]}" 2>&1)"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
 

@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""One tool, over MCP: say what happened.
+
+The assistants that matter here all speak tool calls, and an assistant asked to
+call a tool calls it far more reliably than one asked to remember a file on its
+way out. So this is the front door.
+
+**It is still the file underneath.** `report_outcome` writes
+`<workspace>/.harness/outcome.json`, which is what the wrapper reads, and that
+is deliberate rather than lazy:
+
+- an assistant that reports and then dies has still reported;
+- the wrapper reads one thing however the answer arrived, so `declared_outcome`
+  stays a single function rather than one per transport;
+- an assistant with no tools, or one whose tool mechanism nobody has wired yet,
+  works by writing the file itself and nothing downstream can tell.
+
+**It is deliberately not a docket client.** It cannot read the register, take on
+work, or post updates. The runner speaks docket; giving the assistant its own
+client would put the control loop back inside the agent, hand it the credential
+it currently never sees, and re-open the door to reporting nothing usefully
+every minute.
+
+Stdlib only, JSON-RPC over stdio, so it can be written into a workspace by a
+single-file runner that has no package manager behind it.
+
+    HARNESS_WORKSPACE=/path/to/workspace report-outcome
+"""
+
+import json
+import os
+import pathlib
+import sys
+
+OUTCOMES = ("delivered", "progressed", "blocked", "declined", "failed")
+
+TOOL = {
+    "name": "report_outcome",
+    "description": (
+        "Record what happened with the work you took on. Call this before you "
+        "stop. Calling it again replaces what you said earlier, so the last "
+        "call is the answer."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "outcome": {
+                "type": "string",
+                "enum": list(OUTCOMES),
+                "description": (
+                    "delivered: you believe what was asked for is done. "
+                    "progressed: you did some of it and it is not finished. "
+                    "blocked: you cannot go further without an answer. "
+                    "declined: this is not yours to do — a real answer, not a "
+                    "failure. failed: you could not work at all."
+                ),
+            },
+            "note": {
+                "type": "string",
+                "description": "One line. A person reads this later.",
+            },
+            "question": {
+                "type": "string",
+                "description": (
+                    "Only when blocked. Opened as a real request to the person "
+                    "who asked you, and it stays outstanding until they answer. "
+                    "Ask one specific thing, not a summary of your confusion."
+                ),
+            },
+        },
+        "required": ["outcome", "note"],
+    },
+}
+
+
+def outcome_path() -> pathlib.Path:
+    ws = pathlib.Path(os.environ.get("HARNESS_WORKSPACE", "."))
+    d = ws / ".harness"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "outcome.json"
+
+
+def record(args: dict) -> str:
+    outcome = args.get("outcome")
+    if outcome not in OUTCOMES:
+        # Told, not silently corrected: an assistant that gets a refusal can fix
+        # it in the same turn, which is the whole advantage of a tool over a file
+        # nobody reads back.
+        raise ValueError(f"outcome must be one of {', '.join(OUTCOMES)}; got {outcome!r}")
+    note = (args.get("note") or "").strip()
+    if not note:
+        raise ValueError("note is required — one line that a person can read later")
+    body = {"outcome": outcome, "note": note}
+    if args.get("question"):
+        body["question"] = args["question"].strip()
+    if outcome == "blocked" and "question" not in body:
+        raise ValueError("blocked needs a question: what do you need answered?")
+    outcome_path().write_text(json.dumps(body))
+    if outcome == "blocked":
+        return f"Recorded: blocked. Your question will be put to them: {body['question']}"
+    return f"Recorded: {outcome}. You can stop now."
+
+
+def reply(rid, result=None, error=None) -> None:
+    msg = {"jsonrpc": "2.0", "id": rid}
+    msg["error" if error else "result"] = error if error else result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def main() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        method, rid = req.get("method"), req.get("id")
+        # Notifications carry no id and must not be answered.
+        if rid is None:
+            continue
+
+        if method == "initialize":
+            # Echo the client's protocol version back. These assistants do not
+            # agree on which revision they speak, and refusing the ones that ask
+            # for a version this file has never heard of would be a way of
+            # supporting only whichever was current the day it was written.
+            asked = (req.get("params") or {}).get("protocolVersion") or "2025-06-18"
+            reply(rid, {
+                "protocolVersion": asked,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "docket-harness", "version": "1"},
+            })
+        elif method == "tools/list":
+            reply(rid, {"tools": [TOOL]})
+        elif method == "tools/call":
+            params = req.get("params") or {}
+            if params.get("name") != TOOL["name"]:
+                reply(rid, error={"code": -32602, "message": f"no tool {params.get('name')!r}"})
+                continue
+            try:
+                text = record(params.get("arguments") or {})
+            except ValueError as exc:
+                reply(rid, {"content": [{"type": "text", "text": str(exc)}], "isError": True})
+            else:
+                reply(rid, {"content": [{"type": "text", "text": text}]})
+        elif method == "ping":
+            reply(rid, {})
+        else:
+            reply(rid, error={"code": -32601, "message": f"no method {method!r}"})
+
+
+if __name__ == "__main__":
+    main()

@@ -20,6 +20,7 @@ emit() {  # <marker> <file>
   emit src_lib      lib.sh
   emit src_runner   runner
   emit src_agents   AGENTS.md
+  emit src_tool     tools/report-outcome
   # `echo` ships too. It runs no assistant, so a new box can prove it reaches
   # the register and acts as the right party before anybody spends a token on
   # finding out.

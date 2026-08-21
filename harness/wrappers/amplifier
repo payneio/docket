@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Amplifier.
+# The `amplifier` CLI -- the modular platform, not `amplifier-agent` beside it.
+# They are different programs with different contracts; both are here because
+# either may be the thing you have.
 #
 # Continuation: **captured, and the fallback is implicit.** `run --resume <id>`
 # takes an explicit session; `amplifier continue` resumes "the most recent"

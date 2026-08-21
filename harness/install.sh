@@ -166,6 +166,24 @@ declared_outcome() {  # <workspace>
   rm -f "$f"
   return 1
 }
+
+#: Put the outcome tool where the assistant's config can point at it.
+#:
+#: Written into the workspace rather than assumed to be beside us, because the
+#: installed runner is one file and has no repository behind it. `write_tool` is
+#: defined by the bundle; from a checkout the file is simply copied.
+install_outcome_tool() {  # <workspace> -> path, or nothing
+  local dest="$1/.harness/report-outcome"
+  mkdir -p "$1/.harness" || return 1
+  if declare -F write_outcome_tool >/dev/null 2>&1; then
+    write_outcome_tool "$dest"
+  elif [ -f "${HARNESS_TOOL_SRC:-}" ]; then
+    cp -f "$HARNESS_TOOL_SRC" "$dest"
+  else
+    return 1
+  fi
+  chmod +x "$dest" && printf '%s' "$dest"
+}
 EOF_src_lib
 }
 
@@ -422,9 +440,171 @@ Two things follow:
 EOF_src_agents
 }
 
+src_tool() { cat <<'EOF_src_tool'
+#!/usr/bin/env python3
+"""One tool, over MCP: say what happened.
+
+The assistants that matter here all speak tool calls, and an assistant asked to
+call a tool calls it far more reliably than one asked to remember a file on its
+way out. So this is the front door.
+
+**It is still the file underneath.** `report_outcome` writes
+`<workspace>/.harness/outcome.json`, which is what the wrapper reads, and that
+is deliberate rather than lazy:
+
+- an assistant that reports and then dies has still reported;
+- the wrapper reads one thing however the answer arrived, so `declared_outcome`
+  stays a single function rather than one per transport;
+- an assistant with no tools, or one whose tool mechanism nobody has wired yet,
+  works by writing the file itself and nothing downstream can tell.
+
+**It is deliberately not a docket client.** It cannot read the register, take on
+work, or post updates. The runner speaks docket; giving the assistant its own
+client would put the control loop back inside the agent, hand it the credential
+it currently never sees, and re-open the door to reporting nothing usefully
+every minute.
+
+Stdlib only, JSON-RPC over stdio, so it can be written into a workspace by a
+single-file runner that has no package manager behind it.
+
+    HARNESS_WORKSPACE=/path/to/workspace report-outcome
+"""
+
+import json
+import os
+import pathlib
+import sys
+
+OUTCOMES = ("delivered", "progressed", "blocked", "declined", "failed")
+
+TOOL = {
+    "name": "report_outcome",
+    "description": (
+        "Record what happened with the work you took on. Call this before you "
+        "stop. Calling it again replaces what you said earlier, so the last "
+        "call is the answer."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "outcome": {
+                "type": "string",
+                "enum": list(OUTCOMES),
+                "description": (
+                    "delivered: you believe what was asked for is done. "
+                    "progressed: you did some of it and it is not finished. "
+                    "blocked: you cannot go further without an answer. "
+                    "declined: this is not yours to do — a real answer, not a "
+                    "failure. failed: you could not work at all."
+                ),
+            },
+            "note": {
+                "type": "string",
+                "description": "One line. A person reads this later.",
+            },
+            "question": {
+                "type": "string",
+                "description": (
+                    "Only when blocked. Opened as a real request to the person "
+                    "who asked you, and it stays outstanding until they answer. "
+                    "Ask one specific thing, not a summary of your confusion."
+                ),
+            },
+        },
+        "required": ["outcome", "note"],
+    },
+}
+
+
+def outcome_path() -> pathlib.Path:
+    ws = pathlib.Path(os.environ.get("HARNESS_WORKSPACE", "."))
+    d = ws / ".harness"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "outcome.json"
+
+
+def record(args: dict) -> str:
+    outcome = args.get("outcome")
+    if outcome not in OUTCOMES:
+        # Told, not silently corrected: an assistant that gets a refusal can fix
+        # it in the same turn, which is the whole advantage of a tool over a file
+        # nobody reads back.
+        raise ValueError(f"outcome must be one of {', '.join(OUTCOMES)}; got {outcome!r}")
+    note = (args.get("note") or "").strip()
+    if not note:
+        raise ValueError("note is required — one line that a person can read later")
+    body = {"outcome": outcome, "note": note}
+    if args.get("question"):
+        body["question"] = args["question"].strip()
+    if outcome == "blocked" and "question" not in body:
+        raise ValueError("blocked needs a question: what do you need answered?")
+    outcome_path().write_text(json.dumps(body))
+    if outcome == "blocked":
+        return f"Recorded: blocked. Your question will be put to them: {body['question']}"
+    return f"Recorded: {outcome}. You can stop now."
+
+
+def reply(rid, result=None, error=None) -> None:
+    msg = {"jsonrpc": "2.0", "id": rid}
+    msg["error" if error else "result"] = error if error else result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def main() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        method, rid = req.get("method"), req.get("id")
+        # Notifications carry no id and must not be answered.
+        if rid is None:
+            continue
+
+        if method == "initialize":
+            # Echo the client's protocol version back. These assistants do not
+            # agree on which revision they speak, and refusing the ones that ask
+            # for a version this file has never heard of would be a way of
+            # supporting only whichever was current the day it was written.
+            asked = (req.get("params") or {}).get("protocolVersion") or "2025-06-18"
+            reply(rid, {
+                "protocolVersion": asked,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "docket-harness", "version": "1"},
+            })
+        elif method == "tools/list":
+            reply(rid, {"tools": [TOOL]})
+        elif method == "tools/call":
+            params = req.get("params") or {}
+            if params.get("name") != TOOL["name"]:
+                reply(rid, error={"code": -32602, "message": f"no tool {params.get('name')!r}"})
+                continue
+            try:
+                text = record(params.get("arguments") or {})
+            except ValueError as exc:
+                reply(rid, {"content": [{"type": "text", "text": str(exc)}], "isError": True})
+            else:
+                reply(rid, {"content": [{"type": "text", "text": text}]})
+        elif method == "ping":
+            reply(rid, {})
+        else:
+            reply(rid, error={"code": -32601, "message": f"no method {method!r}"})
+
+
+if __name__ == "__main__":
+    main()
+EOF_src_tool
+}
+
 src_wrapper_amplifier() { cat <<'EOF_src_wrapper_amplifier'
 #!/usr/bin/env bash
-# Amplifier.
+# The `amplifier` CLI -- the modular platform, not `amplifier-agent` beside it.
+# They are different programs with different contracts; both are here because
+# either may be the thing you have.
 #
 # Continuation: **captured, and the fallback is implicit.** `run --resume <id>`
 # takes an explicit session; `amplifier continue` resumes "the most recent"
@@ -477,6 +657,86 @@ jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$
 EOF_src_wrapper_amplifier
 }
 
+src_wrapper_amplifieragent() { cat <<'EOF_src_wrapper_amplifieragent'
+#!/usr/bin/env bash
+# amplifier-agent — the engine, not the `amplifier` CLI beside it. They are
+# different programs; this is the one built to be driven.
+#
+# Continuation: **caller-chosen id plus an explicit resume**, which is the best
+# arrangement of the four here. `--session-id` is ours to pick, so it is derived
+# from the subject and never stored; `--resume` says whether to continue the
+# transcript, so a first run and a tenth differ by one flag and no bookkeeping
+# beyond "have we been here".
+#
+# Its own docs describe this host exactly: "a subprocess host typically writes
+# one file per agent instance and passes --config <path> on every turn". So the
+# config, the MCP server and the skills all live in the workspace, which means
+# an agent's whole configuration moves with its work and nothing is left behind
+# on a machine when the work goes elsewhere.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+SUBJECT="$(printf '%s' "$REQ" | jq -r '.entry.subject')"
+STATE="$WS/.harness/amplifier-agent"; mkdir -p "$STATE"
+
+SESSION_ID="docket-$(printf '%s' "$SUBJECT" | sha256sum | cut -c1-24)"
+
+# The outcome tool, over MCP. The engine takes a path to an MCP file rather than
+# inline JSON, so it is written beside the config it is named in.
+CONFIG="$STATE/host-config.json"
+MCP_FILE="$STATE/mcp.json"
+TOOL="$(install_outcome_tool "$WS" || true)"
+if [ -n "$TOOL" ]; then
+  jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
+    '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}' > "$MCP_FILE"
+fi
+
+# The top level of this file is closed -- an unknown key is an error rather than
+# a warning -- so it is built from exactly the keys the engine documents, and
+# `mcp` is omitted entirely when there is no tool to point at.
+jq -nc --arg mcp "$MCP_FILE" --arg tool "$TOOL" \
+  --arg provider "${AMPLIFIER_PROVIDER:-}" --arg model "${AMPLIFIER_MODEL:-}" '
+  {approval: {mode: "yes"}}
+  + (if $tool == "" then {} else {mcp: {configPath: $mcp}} end)
+  + (if $provider == "" then {} else
+      {provider: ({module: $provider}
+        + (if $model == "" then {} else {config: {default_model: $model}} end))}
+     end)' > "$CONFIG"
+
+ARGS=(run -y --session-id "$SESSION_ID" --cwd "$WS" --config "$CONFIG"
+      --output json --display ndjson)
+[ -n "${AMPLIFIER_AGENT_MODE:-}" ] && ARGS+=(--mode "$AMPLIFIER_AGENT_MODE")
+# `--resume` is a flag over a saved transcript, not an id, so whether we have
+# been here is the only thing worth remembering.
+[ -f "$STATE/ran" ] && ARGS+=(--resume)
+
+OUT="$(amplifier-agent "${ARGS[@]}" "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
+if [ $RC -ne 0 ] && [ -f "$STATE/ran" ]; then
+  echo "resume failed ($RC); starting the session over" >&2
+  RETRY=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && continue; RETRY+=("$a"); done
+  OUT="$(amplifier-agent "${RETRY[@]}" --fresh "$(default_prompt "$REQ")" 2>>"$STATE/display.ndjson")"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+touch "$STATE/ran"
+
+[ $RC -ne 0 ] && { failed_result "amplifier-agent exited $RC"; exit 0; }
+
+# Stdout is one envelope line, and the streams are strictly separated, so this
+# needs none of the guessing the other wrappers do about where a summary lives.
+ERR="$(printf '%s' "$OUT" | jq -r '.error // empty' 2>/dev/null)"
+[ -n "$ERR" ] && { failed_result "$(printf '%s' "$ERR" | head -c 300)"; exit 0; }
+SUMMARY="$(printf '%s' "$OUT" | jq -r '.reply // empty' 2>/dev/null | head -c 400)"
+
+if DECLARED="$(declared_outcome "$WS")"; then
+  printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'
+EOF_src_wrapper_amplifieragent
+}
+
 src_wrapper_claude() { cat <<'EOF_src_wrapper_claude'
 #!/usr/bin/env bash
 # Claude Code.
@@ -500,8 +760,32 @@ SESSION_FILE="$STATE/session"
 PROMPT="$(default_prompt "$REQ")"
 ARGS=(-p "$PROMPT" --output-format json --permission-mode acceptEdits --max-turns "${CLAUDE_MAX_TURNS:-40}")
 [ -n "${CLAUDE_MODEL:-}" ] && ARGS+=(--model "$CLAUDE_MODEL")
-[ -n "${CLAUDE_MCP_CONFIG:-}" ] && ARGS+=(--mcp-config "$CLAUDE_MCP_CONFIG" --strict-mcp-config)
-[ -n "${CLAUDE_ALLOWED_TOOLS:-}" ] && ARGS+=(--allowedTools "$CLAUDE_ALLOWED_TOOLS")
+
+# The outcome tool, offered over MCP. An assistant asked to call a tool calls it
+# far more reliably than one asked to remember a file on its way out -- and an
+# invalid call comes back refused, with a reason, in time for it to fix.
+#
+# Merged with whatever the operator configured rather than replacing it: this is
+# one small server, and clobbering somebody's task tools to add it would be a
+# poor trade. `--allowedTools` is not optional when `--strict-mcp-config` is on:
+# without it the run reaches the model, discovers it may not call the tool,
+# explains that politely, and exits 0 -- which is how every tick came to re-do
+# the same nothing before that flag existed.
+TOOL="$(install_outcome_tool "$WS" || true)"
+MCP="${CLAUDE_MCP_CONFIG:-}"
+ALLOWED="${CLAUDE_ALLOWED_TOOLS:-}"
+if [ -n "$TOOL" ]; then
+  OURS="$(jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
+    '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}')"
+  if [ -n "$MCP" ]; then
+    MCP="$(jq -sc '.[0] * .[1]' <(printf '%s' "$MCP") <(printf '%s' "$OURS"))"
+  else
+    MCP="$OURS"
+  fi
+  ALLOWED="${ALLOWED:+$ALLOWED,}mcp__harness"
+fi
+[ -n "$MCP" ] && ARGS+=(--mcp-config "$MCP" --strict-mcp-config)
+[ -n "$ALLOWED" ] && ARGS+=(--allowedTools "$ALLOWED")
 
 # Resume if we have been here before, and fall back to a fresh session if the id
 # is stale. A session that has expired must not become a task that never runs.
@@ -514,8 +798,8 @@ OUT="$(claude "${ARGS[@]}" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
   echo "resume failed ($RC); starting a fresh session" >&2
   rm -f "$SESSION_FILE"
-  OUT="$(claude -p "$PROMPT" --output-format json --permission-mode acceptEdits \
-         --max-turns "${CLAUDE_MAX_TURNS:-40}" 2>&1)"; RC=$?
+  FRESH=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && break; FRESH+=("$a"); done
+  OUT="$(claude "${FRESH[@]}" 2>&1)"; RC=$?
 fi
 printf '%s\n' "$OUT" >&2
 
@@ -684,14 +968,22 @@ EOF_src_wrapper_pi
 # Aliases, because the assistants are known by more than one name and being told
 # "unknown harness: claude-code" when you asked for the thing you have installed
 # is a poor welcome.
+# Shell function names cannot hold a hyphen, so the embedded wrappers are named
+# without one and the names people actually type are mapped here. Being told
+# "unknown harness: amplifier-agent" when that is exactly what you have would be
+# a poor welcome.
 case "$HARNESS" in
-  claude|claude-code|claudecode) HARNESS=claude ;;
-  pi)                            HARNESS=pi ;;
-  opencode|open-code)            HARNESS=opencode ;;
-  amplifier|amplifier-agent)     HARNESS=amplifier ;;
+  claude|claude-code|claudecode)     HARNESS=claude ;;
+  pi)                                HARNESS=pi ;;
+  opencode|open-code)                HARNESS=opencode ;;
+  amplifier-agent|amplifieragent)    HARNESS=amplifieragent ;;
+  amplifier|amplifier-cli)           HARNESS=amplifier ;;
 esac
 
-AVAILABLE="$(declare -F | sed -n 's/^declare -f src_wrapper_//p' | sort | tr '\n' ' ')"
+# What to call each on the way out. `amplifieragent` is an implementation
+# detail of bash and should not be the name anybody reads.
+display_name() { case "$1" in amplifieragent) echo amplifier-agent ;; claude) echo claude-code ;; *) echo "$1" ;; esac; }
+AVAILABLE="$(for f in $(declare -F | sed -n 's/^declare -f src_wrapper_//p' | sort); do display_name "$f"; done | tr '\n' ' ')"
 if [ -n "${LIST:-}" ]; then
   printf 'harnesses: %s\n' "$AVAILABLE"; exit 0
 fi
@@ -701,7 +993,7 @@ declare -F "src_wrapper_$HARNESS" >/dev/null || die "no harness '$HARNESS'; have
 command -v "$HARNESS" >/dev/null 2>&1 \
   || printf 'install: note — %s is not on PATH yet; the runner will need it\n' "$HARNESS" >&2
 
-: "${NAME:=docket-$HARNESS}"
+: "${NAME:=docket-$(display_name "$HARNESS")}"
 mkdir -p "$DEST" || die "cannot create $DEST"
 OUT="$DEST/$NAME"
 
@@ -729,7 +1021,12 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
   src_agents
   printf 'EOF_AGENTS\n}\n'
 
-  printf '\n# ---- wrapper: %s ----\n' "$HARNESS"
+  printf '\n# ---- the outcome tool, offered over MCP where the assistant speaks it ----\n'
+  printf 'write_outcome_tool() {\n  cat > "$1" <<'"'"'EOF_TOOL'"'"'\n'
+  src_tool
+  printf 'EOF_TOOL\n}\n'
+
+  printf '\n# ---- wrapper: %s ----\n' "$(display_name "$HARNESS")"
   printf 'wrapper_main() {\n'
   "src_wrapper_$HARNESS" | strip_source | sed 's/^/  /'
   printf '\n}\n'

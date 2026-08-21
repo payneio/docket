@@ -2,14 +2,22 @@
 # Aliases, because the assistants are known by more than one name and being told
 # "unknown harness: claude-code" when you asked for the thing you have installed
 # is a poor welcome.
+# Shell function names cannot hold a hyphen, so the embedded wrappers are named
+# without one and the names people actually type are mapped here. Being told
+# "unknown harness: amplifier-agent" when that is exactly what you have would be
+# a poor welcome.
 case "$HARNESS" in
-  claude|claude-code|claudecode) HARNESS=claude ;;
-  pi)                            HARNESS=pi ;;
-  opencode|open-code)            HARNESS=opencode ;;
-  amplifier|amplifier-agent)     HARNESS=amplifier ;;
+  claude|claude-code|claudecode)     HARNESS=claude ;;
+  pi)                                HARNESS=pi ;;
+  opencode|open-code)                HARNESS=opencode ;;
+  amplifier-agent|amplifieragent)    HARNESS=amplifieragent ;;
+  amplifier|amplifier-cli)           HARNESS=amplifier ;;
 esac
 
-AVAILABLE="$(declare -F | sed -n 's/^declare -f src_wrapper_//p' | sort | tr '\n' ' ')"
+# What to call each on the way out. `amplifieragent` is an implementation
+# detail of bash and should not be the name anybody reads.
+display_name() { case "$1" in amplifieragent) echo amplifier-agent ;; claude) echo claude-code ;; *) echo "$1" ;; esac; }
+AVAILABLE="$(for f in $(declare -F | sed -n 's/^declare -f src_wrapper_//p' | sort); do display_name "$f"; done | tr '\n' ' ')"
 if [ -n "${LIST:-}" ]; then
   printf 'harnesses: %s\n' "$AVAILABLE"; exit 0
 fi
@@ -19,7 +27,7 @@ declare -F "src_wrapper_$HARNESS" >/dev/null || die "no harness '$HARNESS'; have
 command -v "$HARNESS" >/dev/null 2>&1 \
   || printf 'install: note — %s is not on PATH yet; the runner will need it\n' "$HARNESS" >&2
 
-: "${NAME:=docket-$HARNESS}"
+: "${NAME:=docket-$(display_name "$HARNESS")}"
 mkdir -p "$DEST" || die "cannot create $DEST"
 OUT="$DEST/$NAME"
 
@@ -47,7 +55,12 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
   src_agents
   printf 'EOF_AGENTS\n}\n'
 
-  printf '\n# ---- wrapper: %s ----\n' "$HARNESS"
+  printf '\n# ---- the outcome tool, offered over MCP where the assistant speaks it ----\n'
+  printf 'write_outcome_tool() {\n  cat > "$1" <<'"'"'EOF_TOOL'"'"'\n'
+  src_tool
+  printf 'EOF_TOOL\n}\n'
+
+  printf '\n# ---- wrapper: %s ----\n' "$(display_name "$HARNESS")"
   printf 'wrapper_main() {\n'
   "src_wrapper_$HARNESS" | strip_source | sed 's/^/  /'
   printf '\n}\n'
