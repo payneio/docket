@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# pi.
+#
+# Continuation: **derived, not stored.** `--session-id <id>` uses that exact
+# session and creates it if it is missing, so the id can be computed from the
+# subject and there is nothing to keep, nothing to lose, and nothing to go stale.
+# The first run and the tenth are the same command.
+#
+# This is why the contract lets a wrapper store nothing: making every wrapper
+# hand an opaque blob back to the runner would have invented state that pi does
+# not need.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+SUBJECT="$(printf '%s' "$REQ" | jq -r '.entry.subject')"
+mkdir -p "$WS/.harness/pi"
+
+# Stable for a subject, and a valid session id wherever it is run. Same input,
+# same session, forever.
+SESSION_ID="$(printf '%s' "$SUBJECT" | sha256sum | cut -c1-32 \
+              | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')"
+
+ARGS=(--print --mode json --session-id "$SESSION_ID" --session-dir "$WS/.harness/pi")
+[ -n "${PI_PROVIDER:-}" ] && ARGS+=(--provider "$PI_PROVIDER")
+[ -n "${PI_MODEL:-}" ] && ARGS+=(--model "$PI_MODEL")
+
+cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
+OUT="$(pi "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+printf '%s\n' "$OUT" >&2
+
+[ $RC -ne 0 ] && { failed_result "pi exited $RC"; exit 0; }
+
+# `--mode json` shape is not guaranteed across versions, so take the first thing
+# that looks like a summary and fall back to the raw tail rather than reporting
+# nothing.
+SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.result? // .text? // .content? // empty)] | last // empty' 2>/dev/null | head -c 400)"
+[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+
+jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

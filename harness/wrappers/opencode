@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# opencode.
+#
+# Continuation: **captured, but scoped by directory.** `run -s <id>` continues a
+# named session and `--continue` takes the last one; `--dir` decides which
+# project that is. Since every subject already has its own workspace, `--dir`
+# plus `--continue` is enough on its own -- the last session in this directory is
+# by construction the last session about this subject.
+#
+# The id is still recorded when the output offers one, because `--continue` is a
+# statement about recency and an explicit id is a statement about identity, and
+# the second survives somebody else running opencode in the same directory.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+STATE="$WS/.harness/opencode"; mkdir -p "$STATE"
+SESSION_FILE="$STATE/session"
+
+ARGS=(run --dir "$WS" --format json)
+[ -n "${OPENCODE_MODEL:-}" ] && ARGS+=(--model "$OPENCODE_MODEL")
+[ -n "${OPENCODE_AGENT:-}" ] && ARGS+=(--agent "$OPENCODE_AGENT")
+if [ -s "$SESSION_FILE" ]; then
+  ARGS+=(--session "$(cat "$SESSION_FILE")")
+elif [ -d "$WS/.opencode" ]; then
+  ARGS+=(--continue)
+fi
+
+OUT="$(opencode "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
+  echo "continuing failed ($RC); starting fresh" >&2
+  rm -f "$SESSION_FILE"
+  OUT="$(opencode run --dir "$WS" --format json "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+
+SID="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.sessionID? // .session_id? // .id? // empty)] | first // empty' 2>/dev/null)"
+[ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
+
+[ $RC -ne 0 ] && { failed_result "opencode exited $RC"; exit 0; }
+
+SUMMARY="$(printf '%s' "$OUT" | jq -rs '[.[]? | (.text? // .content? // .result? // empty)] | last // empty' 2>/dev/null | head -c 400)"
+[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+
+jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Amplifier.
+#
+# Continuation: **captured, and the fallback is implicit.** `run --resume <id>`
+# takes an explicit session; `amplifier continue` resumes "the most recent"
+# one, which is a fact about the process's own state rather than about this
+# subject. The workspace makes the implicit form survivable -- most recent
+# *here* is most recent about this -- but the explicit id is preferred whenever
+# the run gives one, because "most recent" stops being true the moment anything
+# else runs.
+#
+# Amplifier also carries its own bundles and agents, so the assistant may have a
+# task source of its own. That is fine and is the reason this file exists: the
+# runner does not need to know, and only this wrapper does.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+STATE="$WS/.harness/amplifier"; mkdir -p "$STATE"
+SESSION_FILE="$STATE/session"
+
+ARGS=(run --output-format json --mode "${AMPLIFIER_MODE:-single}")
+[ -n "${AMPLIFIER_BUNDLE:-}" ] && ARGS+=(--bundle "$AMPLIFIER_BUNDLE")
+[ -n "${AMPLIFIER_PROVIDER:-}" ] && ARGS+=(--provider "$AMPLIFIER_PROVIDER")
+[ -n "${AMPLIFIER_MODEL:-}" ] && ARGS+=(--model "$AMPLIFIER_MODEL")
+[ -s "$SESSION_FILE" ] && ARGS+=(--resume "$(cat "$SESSION_FILE")")
+
+cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
+OUT="$(amplifier "${ARGS[@]}" "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
+  echo "resume failed ($RC); starting fresh" >&2
+  rm -f "$SESSION_FILE"
+  OUT="$(amplifier run --output-format json --mode "${AMPLIFIER_MODE:-single}" \
+         "$(default_prompt "$REQ")" 2>&1)"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+
+SID="$(printf '%s' "$OUT" | jq -r '.session_id // .session // empty' 2>/dev/null)"
+[ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
+
+[ $RC -ne 0 ] && { failed_result "amplifier exited $RC"; exit 0; }
+
+SUMMARY="$(printf '%s' "$OUT" | jq -r '.response // .result // .content // empty' 2>/dev/null | head -c 400)"
+[ -z "$SUMMARY" ] && SUMMARY="$(printf '%s' "$OUT" | tail -c 400 | tr -d '\000' | tr '\n' ' ')"
+
+jq -nc --arg n "${SUMMARY:-ran and said nothing}" '{outcome:"progressed", note:$n}'

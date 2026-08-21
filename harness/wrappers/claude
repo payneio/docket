@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Claude Code.
+#
+# Continuation: **captured**. A run prints its own `session_id` in the JSON
+# result, and resuming means handing that back with `--resume`. So the id has to
+# be kept somewhere between runs, and the workspace is that somewhere -- the
+# runner stores nothing on a wrapper's behalf.
+#
+# The old runner passed `--no-session-persistence`, which meant every tick met
+# the task for the first time. Feedback three days later arrived at an assistant
+# with no memory of having done the work.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+STATE="$WS/.harness/claude"; mkdir -p "$STATE"
+SESSION_FILE="$STATE/session"
+
+PROMPT="$(default_prompt "$REQ")"
+ARGS=(-p "$PROMPT" --output-format json --permission-mode acceptEdits --max-turns "${CLAUDE_MAX_TURNS:-40}")
+[ -n "${CLAUDE_MODEL:-}" ] && ARGS+=(--model "$CLAUDE_MODEL")
+[ -n "${CLAUDE_MCP_CONFIG:-}" ] && ARGS+=(--mcp-config "$CLAUDE_MCP_CONFIG" --strict-mcp-config)
+[ -n "${CLAUDE_ALLOWED_TOOLS:-}" ] && ARGS+=(--allowedTools "$CLAUDE_ALLOWED_TOOLS")
+
+# Resume if we have been here before, and fall back to a fresh session if the id
+# is stale. A session that has expired must not become a task that never runs.
+if [ -s "$SESSION_FILE" ]; then
+  ARGS+=(--resume "$(cat "$SESSION_FILE")")
+fi
+
+cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
+OUT="$(claude "${ARGS[@]}" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
+  echo "resume failed ($RC); starting a fresh session" >&2
+  rm -f "$SESSION_FILE"
+  OUT="$(claude -p "$PROMPT" --output-format json --permission-mode acceptEdits \
+         --max-turns "${CLAUDE_MAX_TURNS:-40}" 2>&1)"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+
+SID="$(printf '%s' "$OUT" | jq -r '.session_id // empty' 2>/dev/null)"
+[ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
+
+if [ $RC -ne 0 ]; then
+  failed_result "claude exited $RC"; exit 0
+fi
+
+# The model's own summary, not a slice of its JSON. A report made of two hundred
+# arbitrary characters is barely better than silence, and that is what the old
+# runner was posting every minute when its `jq` path came up empty.
+SUMMARY="$(printf '%s' "$OUT" | jq -r '.result // empty' 2>/dev/null | head -c 400)"
+[ -z "$SUMMARY" ] && SUMMARY="ran, but said nothing a summary could be made of"
+
+# Claude has no structured "I am blocked" signal, so this reads its own words for
+# one. It is a heuristic and it is allowed to be wrong in the safe direction:
+# a missed blocker is reported as progress, which leaves the work ours and the
+# register honest about there being no progress.
+if printf '%s' "$SUMMARY" | grep -qiE "need(s)? (a )?(decision|input|clarif)|blocked|cannot proceed|unable to proceed"; then
+  jq -nc --arg n "$SUMMARY" '{outcome:"blocked", note:$n, question:$n}'
+else
+  jq -nc --arg n "$SUMMARY" '{outcome:"progressed", note:$n}'
+fi

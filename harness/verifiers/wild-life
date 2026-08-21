@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Does wild-life agree that this task is done?
+#
+# `docs/protocol.md`: *delivering is a claim about the world, so the runner
+# checks it.* The principle is right. Where the old runner went wrong was making
+# it universal -- it read wild-life's task status for every subject, so an
+# assistant that had never heard of wild-life could not be seen to finish
+# anything, and a subject that was not a wild-life task was checked anyway.
+#
+# So it is a verifier, and it applies to the subjects it understands. A subject
+# it does not recognise is not its business, and it says so by succeeding.
+#
+#   WILD_LIFE_API, WILD_LIFE_TOKEN
+set -uo pipefail
+: "${WILD_LIFE_API:=http://127.0.0.1:9005}"
+
+REQ="$(cat)"
+SUBJECT="$(printf '%s' "$REQ" | jq -r '.entry.subject')"
+TID="$(printf '%s' "$SUBJECT" | sed -n 's/^wild-life:task:\(.*\)$/\1/p')"
+[ -z "$TID" ] && exit 0   # not ours to judge
+
+STATUS="$(curl -s -H "Authorization: Bearer ${WILD_LIFE_TOKEN:-}" \
+          "$WILD_LIFE_API/tasks/$TID" | jq -r '.status // empty')"
+case "$STATUS" in
+  completed) exit 0 ;;
+  "")        echo "wild-life could not be asked, so nothing confirms it"; exit 1 ;;
+  *)         echo "wild-life still has the task as '$STATUS'"; exit 1 ;;
+esac

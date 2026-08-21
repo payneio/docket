@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# A wrapper that runs no assistant at all.
+#
+# For exercising the runner: the contract is a subprocess and a JSON shape, so
+# the whole loop can be driven without a model, an API key, or a minute of
+# waiting. Set HARNESS_ECHO_OUTCOME to whichever branch you want to see.
+#
+# It is also the shortest possible answer to "what does a wrapper have to do".
+set -uo pipefail
+REQ="$(cat)"
+echo "echo wrapper saw: $(printf '%s' "$REQ" | jq -c '{entry: .entry.id, state: .entry.state, ws: .workspace}')" >&2
+printf '%s' "$REQ" | jq -r '.workspace' | xargs -I{} mkdir -p {}/.harness/echo
+
+case "${HARNESS_ECHO_OUTCOME:-progressed}" in
+  blocked) jq -nc '{outcome:"blocked", note:"needs a decision",
+                   question:"Which of the two approaches did you want?"}' ;;
+  declined) jq -nc '{outcome:"declined", note:"outside what I am set up to do"}' ;;
+  delivered) jq -nc '{outcome:"delivered", note:"done"}' ;;
+  failed) exit 3 ;;
+  *) jq -nc '{outcome:"progressed", note:"had a look, nothing finished"}' ;;
+esac

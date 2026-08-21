@@ -36,7 +36,10 @@ first-class and people second-class has broken the point of it.
 - **Not a marketplace or a job board.** Those decide *who gets offered* the work.
   That produces an `offered` entry; everything after is the same conversation
   whether the delegate bid for it, was picked, or is your sister.
-- **Not an orchestrator.** It routes nothing and schedules nothing.
+- **Not an orchestrator.** The service routes nothing and schedules nothing.
+  `harness/` holds scripts that *are* driven by it — a runner and one wrapper per
+  assistant — and they are clients: nothing under `src/docket/` imports them, and
+  removing the directory changes what the register does in no way.
 - **Not agent infrastructure.** Unix accounts for agents are
   [fleetix](../fleetix).
 
@@ -112,6 +115,20 @@ Quiet and stuck are different numbers and the difference is the point.
 since anything *moved*. A party reporting every minute without progressing keeps
 the first near zero forever, which is what happened here on the first day the
 register held anything real.
+
+## Driving an assistant with it
+
+`harness/` — a runner that turns "it is my turn" into one invocation of a
+wrapper, and one wrapper per assistant. The wrappers exist because `claude`,
+`pi`, `opencode` and `amplifier` disagree about how to resume a conversation
+(captured id, caller-chosen id, most-recent-in-this-directory, or not at all),
+and a switch statement inside one runner can only serve the ones that happen to
+share a shape. See `harness/README.md`.
+
+```bash
+HARNESS_WRAPPER=$PWD/harness/wrappers/claude harness/runner
+./harness/harness_check.sh     # the whole loop, with no model and no waiting
+```
 
 ## Where to start
 

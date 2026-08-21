@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Turn "it is my turn" into one invocation of a wrapper, and what it returns
+# into a move.
+#
+# This is what is left of fleetix's reference-agent once everything that knew
+# about a particular assistant is gone. What it knows: how to ask docket what is
+# owed, how to keep a directory, how to run a subprocess, and how to write down
+# what happened. It does not know what a wrapper does, what a subject means, or
+# what finishing looks like.
+#
+# What it deliberately no longer does:
+#   - accept work before looking at it. Accepting is a promise, and the previous
+#     version made it on the assistant's behalf before the assistant had seen
+#     anything, which left a refusal unexpressible.
+#   - decide that finishing means a row changed in wild-life. That was true of
+#     one deployment and became a rule for everybody. Now it is a verifier, and
+#     there is usually no verifier.
+#   - build the prompt. Different assistants want different prompts; the one
+#     that used to live here assumed every assistant had the same MCP tools.
+#
+# `set -e` is intentionally NOT used: nearly every step here has a considered
+# failure path, and an early exit would skip the part that reports it.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness/lib.sh
+. "$HERE/lib.sh"
+
+: "${HARNESS_WRAPPER:?set HARNESS_WRAPPER to the wrapper to invoke}"
+: "${HARNESS_WORKSPACES:=$HOME/workspaces}"
+: "${HARNESS_STATE:=$HOME/.harness}"
+: "${HARNESS_VERIFIER:=}"
+NAME="$(basename "$HARNESS_WRAPPER")"
+
+mkdir -p "$HARNESS_STATE/logs" "$HARNESS_WORKSPACES" || exit 1
+
+# One tick at a time. A run can outlast the interval that started it, and two
+# ticks working the same entry would race each other into the same directory.
+exec 9>"$HARNESS_STATE/lock"
+flock -n 9 || { log "$NAME busy, skipping this tick"; exit 0; }
+
+ME="$(dk "$DOCKET_URL/me" | jq -r '.party // empty')"
+if [ -z "$ME" ]; then
+  # Never guess. An unreachable register is not an empty one, and doing the work
+  # anyway is how an agent ends up acting on something nobody asked it for.
+  log "$NAME cannot reach docket at $DOCKET_URL — doing nothing"
+  exit 1
+fi
+
+open="$(dk "$DOCKET_URL/entries?party=$(uri_escape "$ME")&open_only=true")"
+# Mine to answer: I am the delegate, it is my move, and I am not waiting on a
+# question I have already asked. `whose_turn` is the register's own rule -- a
+# party that has just spoken is waiting, not stalling -- so it is read here
+# rather than re-derived, which is how the two came to disagree before.
+todo="$(printf '%s' "$open" | jq -c '[.[]
+  | select(.your_role == "delegate")
+  | select(.whose_turn == "delegate")
+  | select(.is_blocked | not)
+  | select(.state == "offered" or .state == "accepted")]')"
+
+count="$(printf '%s' "$todo" | jq 'length')"
+[ "$count" = "0" ] && { log "$NAME nothing to answer"; exit 0; }
+log "$NAME has $count to answer"
+
+move() {  # <entry-id> <move> [note] [extra-json]
+  local extra body
+  extra="${4:-}"; [ -z "$extra" ] && extra='{}'
+  body="$(jq -n --arg m "$2" --arg n "${3:-}" --argjson x "$extra" \
+          '{move:$m} + (if $n=="" then {} else {note:$n} end) + $x')"
+  dk -o /dev/null -w '%{http_code}' -X POST "$DOCKET_URL/entries/$1/moves" -d "$body"
+}
+
+#: Ask the requester something, and record that we are waiting on the answer.
+#: A question is an entry in the other direction -- the same loop, and it stays
+#: outstanding until somebody answers it.
+ask() {  # <entry-json> <question> -> question entry id
+  local subject requester label
+  subject="$(printf '%s' "$1" | jq -r '.subject')"
+  requester="$(printf '%s' "$1" | jq -r '.requester')"
+  label="$(printf '%s' "$1" | jq -r '.subject_label // empty')"
+  dk -X POST "$DOCKET_URL/entries" -d "$(jq -n \
+      --arg s "$subject" --arg d "$requester" --arg t "$2" --arg l "$label" \
+      '{subject:$s, delegate:$d, terms:$t}
+       + (if $l=="" then {} else {subject_label:$l} end)')" \
+    | jq -r '.id // empty'
+}
+
+while read -r entry; do
+  [ -z "$entry" ] && continue
+  eid="$(printf '%s' "$entry" | jq -r '.id')"
+  subject="$(printf '%s' "$entry" | jq -r '.subject')"
+  state="$(printf '%s' "$entry" | jq -r '.state')"
+
+  ws="$HARNESS_WORKSPACES/$(workspace_slug "$subject")"
+  mkdir -p "$ws" || { log "$NAME cannot make $ws"; continue; }
+
+  request="$(execution_request "$entry" "$ws" "$ME")"
+  runlog="$HARNESS_STATE/logs/$(date +%Y%m%d-%H%M%S)-${eid:0:8}.log"
+
+  log "$NAME -> $NAME wrapper for ${eid:0:8} ($state) in $ws"
+  out="$(printf '%s' "$request" | "$HARNESS_WRAPPER" 2>>"$runlog")"
+  rc=$?
+  result="$(result_of "$out")"
+  # A wrapper that died, or printed something that is not a result, still has to
+  # produce one. What must not happen is nothing: a run that changes the register
+  # in no way and tells only a log file is the failure a shared record exists to
+  # make visible.
+  if [ $rc -ne 0 ] || ! printf '%s' "$result" | jq -e '.outcome' >/dev/null 2>&1; then
+    tailed="$(tail -c 200 "$runlog" 2>/dev/null | tr -d '\000' | tr '\n' ' ')"
+    result="$(failed_result "wrapper exited $rc: ${tailed:-no output}")"
+  fi
+
+  outcome="$(printf '%s' "$result" | jq -r '.outcome')"
+  note="$(printf '%s' "$result" | jq -r '.note // empty' | head -c 400)"
+  question="$(printf '%s' "$result" | jq -r '.question // empty')"
+
+  # A claim of completion is checked, when there is anything to check it with.
+  if [ "$outcome" = "delivered" ] && [ -n "$HARNESS_VERIFIER" ]; then
+    if ! why="$(printf '%s' "$request" | "$HARNESS_VERIFIER" 2>&1)"; then
+      log "$NAME ${eid:0:8} claimed delivered; verifier disagreed"
+      outcome="progressed"
+      note="said it was finished; ${why:-the verifier disagreed}"
+    fi
+  fi
+
+  # Accepting is a promise, so it is made here and only because the wrapper
+  # chose to work -- never in advance of it looking.
+  if [ "$state" = "offered" ] && [ "$outcome" != "declined" ] && [ "$outcome" != "failed" ]; then
+    move "$eid" accept "picked up by $NAME" >/dev/null
+  fi
+
+  case "$outcome" in
+    declined)
+      move "$eid" decline "${note:-declined}" >/dev/null
+      log "$NAME declined ${eid:0:8}" ;;
+    delivered)
+      move "$eid" deliver "${note:-delivered}" >/dev/null
+      log "$NAME delivered ${eid:0:8}" ;;
+    blocked)
+      qid=""
+      [ -n "$question" ] && qid="$(ask "$entry" "$question")"
+      if [ -n "$qid" ]; then
+        move "$eid" update "${note:-blocked}" "$(jq -n --arg b "$qid" '{blocked_on:$b}')" >/dev/null
+        log "$NAME ${eid:0:8} blocked; asked the requester"
+      else
+        # Say it anyway. A blocker recorded badly beats one recorded nowhere.
+        move "$eid" update "${note:-blocked}${question:+ — needs: $question}" >/dev/null
+        log "$NAME ${eid:0:8} blocked; no question opened"
+      fi ;;
+    progressed|failed|*)
+      move "$eid" update "${note:-$outcome}" >/dev/null
+      log "$NAME ${eid:0:8} $outcome — left $state, reported" ;;
+  esac
+done < <(printf '%s' "$todo" | jq -c '.[]')
+
+log "$NAME done"
