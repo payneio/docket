@@ -33,6 +33,13 @@ done
 src_lib() { cat <<'EOF_src_lib'
 # Shared by the runner and by wrappers that want it. Sourced, never executed.
 
+#: Where the sources are, when there are sources. A bundled runner defines
+#: `write_outcome_tool` instead and never reads this -- but without a default
+#: here, running from a checkout silently had no tool to offer at all, and the
+#: only sign was an MCP server that failed to start.
+_HARNESS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _HARNESS_LIB_DIR="."
+: "${HARNESS_TOOL_SRC:=$_HARNESS_LIB_DIR/tools/report-outcome}"
+
 : "${DOCKET_URL:=http://127.0.0.1:9006}"
 : "${DK_CRED:=$HOME/.docket/credential}"
 
@@ -183,7 +190,11 @@ install_outcome_tool() {  # <workspace> -> path, or nothing
   else
     return 1
   fi
-  chmod +x "$dest" && printf '%s' "$dest"
+  # An unrunnable tool is worse than none: the assistant is offered a server
+  # that fails to start, and nothing says why except a status nobody reads.
+  chmod +x "$dest" 2>/dev/null || return 1
+  [ -s "$dest" ] || return 1
+  printf '%s' "$dest"
 }
 
 #: Validate and tidy an outcome object, or fail.
@@ -833,7 +844,12 @@ ARGS=(-p "$PROMPT" --output-format json --permission-mode acceptEdits --max-turn
 # the same nothing before that flag existed.
 TOOL="$(install_outcome_tool "$WS" || true)"
 MCP="${CLAUDE_MCP_CONFIG:-}"
-ALLOWED="${CLAUDE_ALLOWED_TOOLS:-}"
+# `--allowedTools` is an allowlist, so naming the MCP server narrows everything
+# else *out*. The first real run delivered twice with "verified by inspection
+# since running python was not permitted" -- it could write the file and not run
+# it, because Bash was no longer on the list. So the list starts with a working
+# set and the MCP server is appended to it.
+ALLOWED="${CLAUDE_ALLOWED_TOOLS:-Read,Write,Edit,Glob,Grep,Bash,TodoWrite}"
 if [ -n "$TOOL" ]; then
   OURS="$(jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
     '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}')"
@@ -863,7 +879,13 @@ if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
 fi
 printf '%s\n' "$OUT" >&2
 
-SID="$(printf '%s' "$OUT" | jq -r '.session_id // empty' 2>/dev/null)"
+# `--output-format json` is an *array* of events in current versions and was a
+# single object in older ones. Both are handled rather than pinned, because a
+# wrapper that breaks on an upgrade of the thing it wraps is a wrapper that will
+# be broken the day nobody is looking at it.
+envelope() { printf '%s' "$OUT" | jq -c 'if type=="array" then (.[] | select(.type=="result")) else . end' 2>/dev/null | tail -1; }
+SID="$(envelope | jq -r '.session_id // empty' 2>/dev/null)"
+[ -z "$SID" ] && SID="$(printf '%s' "$OUT" | jq -r 'if type=="array" then (.[]|.session_id?) else .session_id end' 2>/dev/null | grep -v '^null$' | head -1)"
 [ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
 
 if [ $RC -ne 0 ]; then
@@ -873,7 +895,13 @@ fi
 # The model's own summary, not a slice of its JSON. A report made of two hundred
 # arbitrary characters is barely better than silence, and that is what the old
 # runner was posting every minute when its `jq` path came up empty.
-REPLY="$(printf '%s' "$OUT" | jq -r '.result // empty' 2>/dev/null)"
+REPLY="$(envelope | jq -r '.result // empty' 2>/dev/null)"
+SUBTYPE="$(envelope | jq -r '.subtype // empty' 2>/dev/null)"
+if [ -n "$SUBTYPE" ] && [ "$SUBTYPE" != "success" ]; then
+  failed_result "run ended $SUBTYPE: $(envelope | jq -r '.result // .error // empty' | head -c 200)"
+  exit 0
+fi
+
 # The whole reply for parsing -- the outcome block is at the *end* of it, so a
 # truncated copy is exactly the wrong thing to look in. The short form is only
 # ever the note.

@@ -1,5 +1,12 @@
 # Shared by the runner and by wrappers that want it. Sourced, never executed.
 
+#: Where the sources are, when there are sources. A bundled runner defines
+#: `write_outcome_tool` instead and never reads this -- but without a default
+#: here, running from a checkout silently had no tool to offer at all, and the
+#: only sign was an MCP server that failed to start.
+_HARNESS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _HARNESS_LIB_DIR="."
+: "${HARNESS_TOOL_SRC:=$_HARNESS_LIB_DIR/tools/report-outcome}"
+
 : "${DOCKET_URL:=http://127.0.0.1:9006}"
 : "${DK_CRED:=$HOME/.docket/credential}"
 
@@ -150,7 +157,11 @@ install_outcome_tool() {  # <workspace> -> path, or nothing
   else
     return 1
   fi
-  chmod +x "$dest" && printf '%s' "$dest"
+  # An unrunnable tool is worse than none: the assistant is offered a server
+  # that fails to start, and nothing says why except a status nobody reads.
+  chmod +x "$dest" 2>/dev/null || return 1
+  [ -s "$dest" ] || return 1
+  printf '%s' "$dest"
 }
 
 #: Validate and tidy an outcome object, or fail.
