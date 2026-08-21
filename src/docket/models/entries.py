@@ -58,6 +58,21 @@ class Entry(UUIDPrimaryKey, TimestampMixin, Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("entries.id", ondelete="SET NULL"), index=True
     )
+    #: The entry this one is waiting on. Distinct from `parent_id`, which means
+    #: *redirected from*: this one means *cannot move until that one does*.
+    #:
+    #: It exists because it was already happening in prose. A delegate that was
+    #: stuck opened a second entry asking the question, and recorded the
+    #: connection between the two as a sentence in an `update` note -- so
+    #: "stalled because it asked you something" and "stalled because nobody is
+    #: home" read identically, which is the one distinction S21 is about.
+    #:
+    #: Nothing clears it. Whether it still *binds* is derived from whether that
+    #: entry is still open, for the same reason staleness is derived: a stored
+    #: blockage cannot be cleared by the block going away.
+    blocked_on: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entries.id", ondelete="SET NULL"), index=True
+    )
     #: iTIP UID+SEQUENCE, or an A2A task id — so an exchange with a system we do
     #: not control round-trips without being paraphrased.
     external_ref: Mapped[str | None] = mapped_column(Text, index=True)

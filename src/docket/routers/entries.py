@@ -1,99 +1,26 @@
-"""The register, and the moves that change it."""
+"""The register, and the moves that change it.
+
+Nothing but HTTP happens here: what a move *means* is in ``docket.service``, so
+that the board and this router cannot come to disagree about it.
+"""
 
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import Select, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docket import states
+from docket import service, states
 from docket.auth import Identity, current_identity
 from docket.db.session import get_session
-from docket.models.entries import Entry, Move
+from docket.models.entries import Entry
 from docket.schemas.entries import EntryRead, MoveCreate, OfferCreate
 
 router = APIRouter(prefix="/entries", tags=["entries"])
 
 
-def _role(entry: Entry, party: str) -> str | None:
-    """The caller's relation to this entry.
-
-    Being *accountable* is not a role here and gets no moves. Accountability is
-    who answers for the outcome, not who is in the conversation — conflating them
-    is how a delegator ends up able to accept on someone else's behalf.
-    """
-    if party == entry.requester:
-        return "requester"
-    if entry.delegate is not None and party == entry.delegate:
-        return "delegate"
-    return None
-
-
-def _may_read(entry: Entry, identity: Identity) -> bool:
-    """Whether this caller may see this entry at all.
-
-    Being *accountable* reads and still does not move. The two questions are
-    different: answering for an outcome you cannot see is not accountability,
-    and being able to see a conversation is not being in it. `_role` above stays
-    the narrower answer, and it is the one the transition table is asked.
-    """
-    if identity.is_operator:
-        return True
-    return identity.party in (entry.requester, entry.delegate, entry.accountable)
-
-
-def _scope(stmt: Select[tuple[Entry]], identity: Identity) -> Select[tuple[Entry]]:
-    """The same rule as `_may_read`, pushed into SQL so a listing does not read
-    the whole register and then throw most of it away."""
-    if identity.is_operator:
-        return stmt
-    return stmt.where(
-        (Entry.requester == identity.party)
-        | (Entry.delegate == identity.party)
-        | (Entry.accountable == identity.party)
-    )
-
-
-def _read(entry: Entry, party: str) -> EntryRead:
-    role = _role(entry, party)
-    last = max((m.at for m in entry.moves), default=None)
-    quiet = (datetime.now(UTC) - last).total_seconds() if last else None
-    return EntryRead(
-        **{c.name: getattr(entry, c.name) for c in entry.__table__.columns},
-        moves=list(entry.moves),
-        is_open=entry.state not in states.TERMINAL,
-        quiet_for_seconds=quiet,
-        available_moves=states.moves_available(entry.state, role),
-        your_role=role,
-    )
-
-
-async def _next_seq(session: AsyncSession, entry_id: uuid.UUID) -> int:
-    current = await session.scalar(select(func.max(Move.seq)).where(Move.entry_id == entry_id))
-    return (current or 0) + 1
-
-
-async def _record(
-    session: AsyncSession, entry: Entry, move: str, *, by: str, identity: Identity,
-    before: str | None, after: str, note: str | None,
-) -> None:
-    session.add(
-        Move(
-            entry_id=entry.id,
-            seq=await _next_seq(session, entry.id),
-            at=datetime.now(UTC),
-            by=by,
-            recorded_by=identity.party,
-            # Only a move a party made itself, over a socket the kernel vouched
-            # for, is corroborated by anything other than the writer.
-            attested=identity.attested and by == identity.party,
-            move=move,
-            from_state=before,
-            to_state=after,
-            note=note,
-        )
-    )
+def _http(exc: service.Rejected) -> HTTPException:
+    return HTTPException(exc.status_code, detail=exc.detail)
 
 
 @router.post("", response_model=EntryRead, status_code=status.HTTP_201_CREATED)
@@ -103,35 +30,11 @@ async def offer(
     identity: Identity = Depends(current_identity),
 ) -> EntryRead:
     """Ask someone to discharge something. The offer *is* the entry's creation."""
-    if payload.delegate == identity.party:
-        # Something you owe yourself is an intention, and intentions live in the
-        # system that authored them. `docs/plan.md` found 443 of 446 wild-life
-        # assignments were Paul to Paul, which is what this being expressible
-        # costs: a register full of rows that say nothing about anybody.
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="a self-offer is not an offer; that is an intention, not an assignment",
-        )
-    after = states.apply(None, "offer", "requester")  # the caller is the requester by definition
-    entry = Entry(
-        subject=payload.subject,
-        subject_label=payload.subject_label,
-        label_as_of=datetime.now(UTC) if payload.subject_label else None,
-        requester=identity.party,
-        delegate=payload.delegate,
-        accountable=payload.accountable or identity.party,
-        state=after,
-        terms=payload.terms,
-        expected_by=payload.expected_by,
-        external_ref=payload.external_ref,
-    )
-    session.add(entry)
-    await session.flush()
-    await _record(session, entry, "offer", by=identity.party, identity=identity,
-                  before=None, after=after, note=payload.note)
-    await session.flush()
-    await session.refresh(entry)
-    return _read(entry, identity.party)
+    try:
+        entry = await service.offer(session, payload, identity)
+    except service.Rejected as exc:
+        raise _http(exc) from None
+    return service.read_entry(entry, identity.party)
 
 
 @router.get("", response_model=list[EntryRead])
@@ -142,12 +45,23 @@ async def list_entries(
     subject: str | None = Query(None),
     parent_id: uuid.UUID | None = Query(None, description="the children of a redirected entry"),
     open_only: bool = Query(True, description="exclude ended conversations"),
+    turn: str | None = Query(None, description="'requester' | 'delegate' | 'mine'"),
+    stalled_over: float | None = Query(
+        None, ge=0, description="seconds since the state last changed — the S21 filter"
+    ),
+    blocked: bool | None = Query(None, description="waiting on another entry that is still open"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> list[EntryRead]:
     """Entries you are a party to. The owner of the register sees all of them;
-    nobody else sees a conversation they are not named on."""
-    stmt = _scope(select(Entry), identity)
+    nobody else sees a conversation they are not named on.
+
+    ``turn`` and ``stalled_over`` are folded from the move log rather than read
+    off a column, so they are filtered after the query rather than in it. That
+    costs a page of rows and buys the thing this register exists for: neither
+    number can be stale, because neither is ever written down.
+    """
+    stmt = service.scope(select(Entry), identity)
     if party:
         stmt = stmt.where((Entry.requester == party) | (Entry.delegate == party))
     if subject:
@@ -157,8 +71,25 @@ async def list_entries(
     if open_only:
         stmt = stmt.where(Entry.state.notin_(tuple(states.TERMINAL)))
     stmt = stmt.order_by(Entry.updated_at.desc()).limit(limit).offset(offset)
-    rows = (await session.execute(stmt)).scalars().all()
-    return [_read(e, identity.party) for e in rows]
+
+    rows = list((await session.execute(stmt)).scalars().all())
+    blockers = await service.open_blockers(session, rows)
+    read = [service.read_entry(e, identity.party, blockers) for e in rows]
+
+    if turn:
+        wanted = turn
+        if turn == "mine":
+            read = [r for r in read if r.whose_turn is not None and r.whose_turn == r.your_role]
+        else:
+            read = [r for r in read if r.whose_turn == wanted]
+    if stalled_over is not None:
+        read = [
+            r for r in read
+            if r.stalled_for_seconds is not None and r.stalled_for_seconds >= stalled_over
+        ]
+    if blocked is not None:
+        read = [r for r in read if r.is_blocked is blocked]
+    return read
 
 
 @router.get("/{entry_id}", response_model=EntryRead)
@@ -171,9 +102,9 @@ async def get_entry(
     # 404 and not 403: telling a stranger that an entry exists but is not theirs
     # tells them somebody owes somebody something, which is the fact the
     # register holds. There is nothing left to protect after that.
-    if entry is None or not _may_read(entry, identity):
+    if entry is None or not service.may_read(entry, identity):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
-    return _read(entry, identity.party)
+    return service.read_entry(entry, identity.party, await service.open_blockers(session, [entry]))
 
 
 @router.post("/{entry_id}/moves", response_model=EntryRead)
@@ -197,68 +128,13 @@ async def make_move(
     # writers make this reachable rather than theoretical: two agents on a timer
     # and a person at the board.
     entry = await session.get(Entry, entry_id, with_for_update=True)
-    if entry is None or not _may_read(entry, identity):
+    if entry is None or not service.may_read(entry, identity):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
-
-    # Whose move is this? Normally the caller's. A party may also write down the
-    # other party's move -- somebody with no account here cannot make it
-    # themselves, and "Sara declined" has to be recordable or the register can
-    # only describe people who use it.
-    mover = identity.party
-    if payload.on_behalf_of and payload.on_behalf_of != identity.party:
-        if _role(entry, identity.party) is None:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                detail="only a party to this entry may record the other party's move",
-            )
-        mover = payload.on_behalf_of
-
-    before = entry.state
     try:
-        after = states.apply(before, payload.move, _role(entry, mover))
-    except states.Refused as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
-
-    if payload.move == "redirect":
-        if not payload.to:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="redirect needs `to`")
-        if payload.to == mover:
-            # The child would be an offer to yourself, which `offer` refuses for
-            # the same reason. Handing work to yourself is not handing it on.
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail="cannot redirect to yourself"
-            )
-    if payload.terms is not None:
-        entry.terms = payload.terms
-    if payload.expected_by is not None:
-        entry.expected_by = payload.expected_by
-
-    entry.state = after
-    await _record(session, entry, payload.move, by=mover, identity=identity,
-                  before=before, after=after, note=payload.note)
-
-    if payload.move == "redirect":
-        # The chain: whoever is handing it on becomes the requester of the child,
-        # and **accountable does not move** — that is the rule delegation exists
-        # to keep, and it is why this is copied rather than reassigned.
-        session.add(
-            Entry(
-                subject=entry.subject,
-                subject_label=entry.subject_label,
-                label_as_of=entry.label_as_of,
-                requester=mover,
-                delegate=payload.to,
-                accountable=entry.accountable,
-                state="offered",
-                terms=payload.terms or entry.terms,
-                expected_by=entry.expected_by,
-                parent_id=entry.id,
-            )
-        )
-
-    await session.flush()
-    await session.refresh(entry)
-    return _read(entry, identity.party)
+        entry = await service.apply_move(session, entry, payload, identity)
+    except service.Rejected as exc:
+        raise _http(exc) from None
+    return service.read_entry(entry, identity.party, await service.open_blockers(session, [entry]))
 
 
 @router.delete("/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
