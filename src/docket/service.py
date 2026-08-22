@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docket import states
+from docket import events, states
 from docket.auth import Identity
 from docket.models.entries import Entry, Move
 from docket.schemas.entries import EntryRead, MoveCreate, OfferCreate
@@ -191,9 +191,11 @@ async def _next_seq(session: AsyncSession, entry_id: uuid.UUID) -> int:
 async def _record(
     session: AsyncSession, entry: Entry, move: str, *, by: str, identity: Identity,
     before: str | None, after: str, note: str | None,
-) -> None:
-    session.add(
-        Move(
+) -> Move:
+    """Write the move down. Returns it so the caller can stage a stream event
+    once the entry is in its final shape — the id is assigned at flush, and the
+    event must describe the entry as it ended up, not as it was mid-move."""
+    row = Move(
             entry_id=entry.id,
             seq=await _next_seq(session, entry.id),
             at=datetime.now(UTC),
@@ -206,8 +208,9 @@ async def _record(
             from_state=before,
             to_state=after,
             note=note,
-        )
     )
+    session.add(row)
+    return row
 
 
 async def _resolve_blocker(
@@ -244,10 +247,11 @@ async def offer(session: AsyncSession, payload: OfferCreate, identity: Identity)
     )
     session.add(entry)
     await session.flush()
-    await _record(session, entry, "offer", by=identity.party, identity=identity,
-                  before=None, after=after, note=payload.note)
+    move = await _record(session, entry, "offer", by=identity.party, identity=identity,
+                         before=None, after=after, note=payload.note)
     await session.flush()
     await session.refresh(entry)
+    events.stage(session, events.from_move(entry, move))
     return entry
 
 
@@ -289,7 +293,7 @@ async def apply_move(
         await _resolve_blocker(session, entry, payload.blocked_on, identity)
 
     entry.state = after
-    await _record(session, entry, payload.move, by=mover, identity=identity,
+    move = await _record(session, entry, payload.move, by=mover, identity=identity,
                   before=before, after=after, note=payload.note)
 
     if payload.move == "redirect":
@@ -313,6 +317,7 @@ async def apply_move(
 
     await session.flush()
     await session.refresh(entry)
+    events.stage(session, events.from_move(entry, move))
     return entry
 
 

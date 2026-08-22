@@ -16,6 +16,8 @@ dependencies = [
     # The board. Server-rendered HTML forms, so: templates, and a form parser.
     "jinja2>=3.1.0",
     "python-multipart>=0.0.9",
+    # The register, as tools. See src/docket/mcp.py.
+    "fastmcp>=2.11",
 ]
 
 [project.scripts]

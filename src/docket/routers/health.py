@@ -18,7 +18,7 @@ async def health(session: AsyncSession = Depends(get_session)) -> dict:
     return {"status": "ok"}
 
 
-@router.get("/me")
+@router.get("/me", operation_id="docket_me")
 async def me(identity: Identity = Depends(current_identity)) -> dict:
     """Who docket thinks you are, and on the strength of which credential."""
     return {

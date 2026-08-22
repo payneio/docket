@@ -23,7 +23,10 @@ def _http(exc: service.Rejected) -> HTTPException:
     return HTTPException(exc.status_code, detail=exc.detail)
 
 
-@router.post("", response_model=EntryRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=EntryRead, status_code=status.HTTP_201_CREATED,
+    operation_id="docket_offer",
+)
 async def offer(
     payload: OfferCreate,
     session: AsyncSession = Depends(get_session),
@@ -37,7 +40,7 @@ async def offer(
     return service.read_entry(entry, identity.party)
 
 
-@router.get("", response_model=list[EntryRead])
+@router.get("", response_model=list[EntryRead], operation_id="docket_entries")
 async def list_entries(
     session: AsyncSession = Depends(get_session),
     identity: Identity = Depends(current_identity),
@@ -92,7 +95,7 @@ async def list_entries(
     return read
 
 
-@router.get("/{entry_id}", response_model=EntryRead)
+@router.get("/{entry_id}", response_model=EntryRead, operation_id="docket_entry")
 async def get_entry(
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -107,7 +110,7 @@ async def get_entry(
     return service.read_entry(entry, identity.party, await service.open_blockers(session, [entry]))
 
 
-@router.post("/{entry_id}/moves", response_model=EntryRead)
+@router.post("/{entry_id}/moves", response_model=EntryRead, operation_id="docket_move")
 async def make_move(
     entry_id: uuid.UUID,
     payload: MoveCreate,
