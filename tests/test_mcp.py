@@ -31,22 +31,34 @@ EXPECTED_TOOLS = {
 }
 
 
-def _routes():
+def _routes() -> list[tuple[str, str]]:
     """Every (method, path) the app actually serves.
 
-    Walks the included routers rather than reading the OpenAPI, because the
-    board is ``include_in_schema=False`` and still needs to be checked: an
-    exclusion that matches nothing is a claim about this service that stopped
-    being true. Each route's ``path`` already carries its router's prefix.
+    Recursive, because routers include routers and a one-level walk silently
+    misses whatever is nested — in wild-life the same shortcut found 83 routes,
+    missed every `/people` one, and concluded an exclusion matched nothing.
+
+    Walks routes rather than the OpenAPI because the board is
+    ``include_in_schema=False`` and still needs checking: an exclusion that
+    matches nothing is a claim about this service that stopped being true. Each
+    route's ``path`` already carries its router's prefix.
     """
-    found = []
-    for route in app.routes:
-        router = getattr(route, "original_router", None)
-        for actual in getattr(router, "routes", None) or ([route] if router is None else []):
-            path = getattr(actual, "path", None)
-            for method in sorted(getattr(actual, "methods", []) or []):
+    found: list[tuple[str, str]] = []
+    seen: set[int] = set()
+
+    def walk(node: object) -> None:
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        for route in getattr(node, "routes", None) or []:
+            path = getattr(route, "path", None)
+            for method in sorted(getattr(route, "methods", None) or []):
                 if path:
                     found.append((method, path))
+            inner = getattr(route, "original_router", None)
+            walk(inner if inner is not None else route)
+
+    walk(app)
     return found
 
 
