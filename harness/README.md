@@ -122,6 +122,31 @@ The last block wins, so an assistant that sketches the format while thinking
 aloud is not taken at its example. A `blocked` without a question is rejected on
 every channel — it is as useless in a response as in a tool call.
 
+## Setting up a principal
+
+A fleetix principal is its own unix account with its own PATH, so it has none of
+the operator's tools. Four steps, and only the third differs between agents:
+
+```bash
+sudo -u <name> bash -lc 'curl -fsSL <install.sh> | bash -s -- --harness echo'
+sudo -u <name> bash -lc '~/.local/bin/docket-echo'      # reaches the register?
+```
+
+Prove it can reach the register and act as the right party **before** installing
+an assistant. `echo` runs no model, so the answer costs nothing and the failure,
+if there is one, is unambiguous.
+
+Then install the assistant for that account, install the harness for it, and
+write `~/agent`. Keep `~/agent` at mode `700` — `fleetix doctor` checks it.
+
+The three on this machine, as examples of the same four steps:
+
+| | assistant | reaches a model by |
+|---|---|---|
+| `researcher` | `amplifier-agent` (via `uv`) | the LAN proxy's native Anthropic endpoint |
+| `planner` | `claude-code` | its own `ANTHROPIC_API_KEY` |
+| `coder` | `claude-coder` | its own `ANTHROPIC_API_KEY`, plus `GITHUB_TOKEN` to clone |
+
 ## Scheduling one
 
 The runner is **single-pass**: it asks what is owed, works what is due, and
