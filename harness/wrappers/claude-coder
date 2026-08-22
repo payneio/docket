@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Claude Code, set up to write code rather than to answer.
+#
+# The difference from `claude` is not the model, it is what the assistant is
+# given and what it is told:
+#
+#   - the language tools. `LSP` and `Task` are on the allowlist, so it can ask
+#     the language server where a symbol is used instead of grepping for the
+#     string and hoping. Coding runs are also allowed more turns, because a real
+#     change is read-edit-build-test and each of those is a turn.
+#   - the workflow. A coding assistant that does not know its working directory
+#     persists will clone the repository again every run, and one that does not
+#     know the directory is *its own* will be shy about writing in it. Both are
+#     failures of briefing rather than of ability, so this ships the briefing.
+#
+# Everything else -- how an outcome is reported, how a session resumes -- is the
+# same as every other wrapper, which is the point of there being a contract.
+set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+REQ="$(cat)"
+WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
+STATE="$WS/.harness/claude-coder"; mkdir -p "$STATE"
+SESSION_FILE="$STATE/session"
+
+# The briefing, written beside the general one on every run so an edit here
+# reaches every agent without redeploying anything.
+cat > "$WS/CODING.md" <<'BRIEF'
+# Working on code here
+
+## This directory is yours, and it persists
+
+You are in a working directory that belongs to **this one piece of work**. It is
+still here next time you are asked about the same thing, with whatever you left
+in it. So:
+
+- **Look before you fetch.** If the repository you need is already cloned here,
+  use it — pull, do not clone again. Re-cloning every run throws away branches,
+  build caches and anything uncommitted.
+- **Write freely.** This is not a shared checkout and nothing else is using it.
+- **Keep scratch work.** Notes, a plan, a failing test you have not fixed yet:
+  leave them. Future-you reads them.
+
+If the work needs a repository nobody has cloned yet, clone it here. `git` and a
+`GITHUB_TOKEN` are available.
+
+## Use the language server
+
+`LSP` is available and is better than grep for anything structural: where a
+symbol is defined, everywhere it is used, what the type is, what the compiler
+already thinks is wrong. Reach for it before reading whole files, and read the
+diagnostics before deciding you are finished.
+
+## Finish like an engineer
+
+- **Run the tests.** A change you have not run is a claim, and `delivered` is
+  supposed to mean more than that.
+- **Read the diagnostics** after editing, not before.
+- **Do not commit or push unless you were asked to.** If you were: work on a
+  branch, never on the default one, and say in your note what you pushed.
+- If you cannot build or test — a missing toolchain, no network — that is
+  `blocked` with a specific question, not `delivered` with a caveat.
+
+## Scope
+
+Do what was asked and stop. A refactor nobody requested is not a bonus; it is a
+larger diff for somebody else to review. If you find something else wrong, say so
+in your note rather than fixing it.
+BRIEF
+
+PROMPT="$(default_prompt "$REQ")
+Read CODING.md in this directory before you start. It describes how this
+workspace is used and what finishing means here."
+
+ARGS=(-p "$PROMPT" --output-format json --permission-mode acceptEdits
+      --max-turns "${CLAUDE_MAX_TURNS:-80}")
+[ -n "${CLAUDE_MODEL:-}" ] && ARGS+=(--model "$CLAUDE_MODEL")
+
+TOOL="$(install_outcome_tool "$WS" || true)"
+MCP="${CLAUDE_MCP_CONFIG:-}"
+# Wider than the general wrapper's: this one is meant to navigate a codebase and
+# build it. `--allowedTools` is an allowlist, so anything absent is refused --
+# which is how the first real run came to deliver twice having never been able
+# to run the tests it claimed to have checked.
+ALLOWED="${CLAUDE_ALLOWED_TOOLS:-Read,Write,Edit,Glob,Grep,Bash,TodoWrite,LSP,Task,WebFetch,WebSearch}"
+if [ -n "$TOOL" ]; then
+  OURS="$(jq -nc --arg c "$(command -v python3)" --arg a "$TOOL" --arg ws "$WS" \
+    '{mcpServers:{harness:{command:$c, args:[$a], env:{HARNESS_WORKSPACE:$ws}}}}')"
+  if [ -n "$MCP" ]; then
+    MCP="$(jq -sc '.[0] * .[1]' <(printf '%s' "$MCP") <(printf '%s' "$OURS"))"
+  else
+    MCP="$OURS"
+  fi
+  ALLOWED="$ALLOWED,mcp__harness"
+fi
+[ -n "$MCP" ] && ARGS+=(--mcp-config "$MCP" --strict-mcp-config)
+ARGS+=(--allowedTools "$ALLOWED")
+[ -s "$SESSION_FILE" ] && ARGS+=(--resume "$(cat "$SESSION_FILE")")
+
+cd "$WS" || { failed_result "cannot enter $WS"; exit 0; }
+OUT="$(claude "${ARGS[@]}")"; RC=$?
+if [ $RC -ne 0 ] && [ -s "$SESSION_FILE" ]; then
+  echo "resume failed ($RC); starting a fresh session" >&2
+  rm -f "$SESSION_FILE"
+  FRESH=(); for a in "${ARGS[@]}"; do [ "$a" = "--resume" ] && break; FRESH+=("$a"); done
+  OUT="$(claude "${FRESH[@]}")"; RC=$?
+fi
+printf '%s\n' "$OUT" >&2
+debug_dump "$WS" "stdout" "$OUT"
+
+envelope() { printf '%s' "$OUT" | jq -c 'if type=="array" then (.[] | select(.type=="result")) else . end' 2>/dev/null | tail -1; }
+SID="$(envelope | jq -r '.session_id // empty' 2>/dev/null)"
+[ -n "$SID" ] && printf '%s' "$SID" > "$SESSION_FILE"
+[ $RC -ne 0 ] && { failed_result "claude exited $RC"; exit 0; }
+
+REPLY="$(envelope | jq -r '.result // empty' 2>/dev/null)"
+SUBTYPE="$(envelope | jq -r '.subtype // empty' 2>/dev/null)"
+if [ -n "$SUBTYPE" ] && [ "$SUBTYPE" != "success" ]; then
+  failed_result "run ended $SUBTYPE: $(printf '%s' "$REPLY" | head -c 200)"; exit 0
+fi
+SUMMARY="$(printf '%s' "$REPLY" | head -c 400)"
+[ -z "$SUMMARY" ] && SUMMARY="ran, but said nothing a summary could be made of"
+
+if DECLARED="$(declared_outcome "$WS")"; then
+  printf '%s' "$DECLARED" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if SAID="$(response_outcome "$REPLY")"; then
+  printf '%s' "$SAID" | jq -c --arg s "$SUMMARY" '.note = (if .note == "" then $s else .note end)'
+  exit 0
+fi
+if printf '%s' "$SUMMARY" | grep -qiE "need(s)? (a )?(decision|input|clarif)|blocked|cannot proceed|unable to proceed"; then
+  jq -nc --arg n "$SUMMARY" '{outcome:"blocked", note:$n, question:$n}'
+else
+  jq -nc --arg n "$SUMMARY" '{outcome:"progressed", note:$n}'
+fi

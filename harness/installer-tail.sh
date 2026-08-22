@@ -26,6 +26,7 @@ fi
 # "unknown harness: amplifier-agent" when that is exactly what you have would be
 # a poor welcome.
 case "$HARNESS" in
+  claude-coder|claudecoder|coder)    HARNESS=claudecoder ;;
   claude|claude-code|claudecode)     HARNESS=claude ;;
   pi)                                HARNESS=pi ;;
   opencode|open-code)                HARNESS=opencode ;;
@@ -35,7 +36,14 @@ esac
 
 # What to call each on the way out. `amplifieragent` is an implementation
 # detail of bash and should not be the name anybody reads.
-display_name() { case "$1" in amplifieragent) echo amplifier-agent ;; claude) echo claude-code ;; *) echo "$1" ;; esac; }
+display_name() {
+  case "$1" in
+    amplifieragent) echo amplifier-agent ;;
+    claudecoder)    echo claude-coder ;;
+    claude)         echo claude-code ;;
+    *)              echo "$1" ;;
+  esac
+}
 AVAILABLE="$(for f in $(declare -F | sed -n 's/^declare -f src_wrapper_//p' | sort); do display_name "$f"; done | tr '\n' ' ')"
 if [ -n "${LIST:-}" ]; then
   printf 'harnesses: %s\n' "$AVAILABLE"; exit 0
@@ -84,11 +92,15 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
   printf 'EOF_TOOL\n}\n'
 
   printf '\n# ---- wrapper: %s ----\n' "${CUSTOM:+custom }$(display_name "$HARNESS")"
+  # Not indented. It would read better inside the braces and a wrapper is
+  # allowed to contain a heredoc, whose terminator must start at column zero --
+  # indenting the body silently turns `BRIEF` into `  BRIEF` and the whole file
+  # stops parsing at the end.
   printf 'wrapper_main() {\n'
   if [ -n "$CUSTOM" ]; then
-    printf '%s' "$CUSTOM" | strip_source | sed 's/^/  /'
+    printf '%s' "$CUSTOM" | strip_source
   else
-    "src_wrapper_$HARNESS" | strip_source | sed 's/^/  /'
+    "src_wrapper_$HARNESS" | strip_source
   fi
   printf '\n}\n'
   printf 'if [ "${HARNESS_ROLE:-}" = "wrapper" ]; then wrapper_main; exit $?; fi\n'
