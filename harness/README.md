@@ -147,6 +147,13 @@ AMPLIFIER_AGENT_PROVIDER  AMPLIFIER_AGENT_MODEL  AMPLIFIER_AGENT_MODE
 HARNESS_DEBUG=1      keep each assistant's raw stdout in the workspace
 ```
 
+**Through a proxy, prefer a provider's native endpoint.** Pointing
+`amplifier-agent` at litellm's OpenAI-compatible `/v1` fails the moment a tool is
+used — the proxy has to translate tool results into Anthropic's shape and raises
+`AnthropicException - 'tool_call_id'`. A plain question works, which is the worst
+way for it to be broken. Its native Anthropic endpoint (`ANTHROPIC_BASE_URL`
+without `/v1`) works with tools.
+
 `HARNESS_DEBUG` is worth knowing about: every wrapper parses an output shape
 nobody documents, and when a guess is wrong the only symptom is a strange note in
 the register — by which point the output that would explain it is gone.
