@@ -33,6 +33,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${HARNESS_AGENTS_MD:=$HERE/AGENTS.md}"
 NAME="$(basename "$HARNESS_WRAPPER")"
 
+# `--wait` blocks until there is plausibly something to do and then exits. It is
+# a separate mode rather than a flag on the pass, so the pass stays exactly what
+# it was: ask, work, exit. Deliberately before the lock -- waiting is not
+# working, and holding the lock while idle would stop the next tick ever running.
+if [ "${1:-}" = "--wait" ]; then
+  wait_for_work || { log "$NAME cannot follow $DOCKET_URL/stream"; exit 1; }
+  exit 0
+fi
+
 mkdir -p "$HARNESS_STATE/logs" "$HARNESS_WORKSPACES" || exit 1
 
 # One tick at a time. A run can outlast the interval that started it, and two

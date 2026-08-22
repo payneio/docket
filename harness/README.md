@@ -165,10 +165,31 @@ Put the loop in the thing you own instead:
 
 ```bash
 while :; do
-  timeout "${AGENT_TICK_TIMEOUT:-900}" docket-amplifier-agent || true
-  sleep "${AGENT_INTERVAL:-60}"
+  timeout "${AGENT_TICK_TIMEOUT:-1800}" docket-<harness>
+  docket-<harness> --wait || sleep "${AGENT_INTERVAL:-60}"
 done
 ```
+
+`--wait` follows `GET /stream` and returns as soon as somebody else moves
+something you are named on — so offered work is picked up in about a second
+rather than in up to a minute. It is a separate mode, not a flag on the pass:
+the pass stays exactly what it was, and waiting does not hold the lock.
+
+Three things it does that a bare `sleep` cannot, and one it does not:
+
+- **It ignores your own moves.** The runner posts one at the end of nearly every
+  pass, and waking on that is a loop with no sleep in it. The stream's `open`
+  frame says which party you are, so no extra call is needed to know.
+- **It returns on a timer anyway** — `HARNESS_SWEEP_SECONDS`, 15 minutes by
+  default. Staleness is the *absence* of events: nothing will ever be published
+  saying a delegate has gone quiet for three days. The stream turns that sweep
+  from every sixty seconds into every fifteen minutes; it does not remove it.
+- **It reports an unreachable stream** rather than waiting on nothing, which is
+  why the `|| sleep` above is there. A register you cannot follow must degrade
+  to polling, never to silence.
+
+It does not make the register push you work. Nothing is delivered to an agent;
+it is still offered, and the agent still asks.
 
 Restarts then count only when something died and uptime means how long it has
 been healthy. The `timeout` keeps what exiting used to guarantee: a wedged

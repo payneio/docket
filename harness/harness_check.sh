@@ -40,6 +40,7 @@ export HARNESS_STATE=$(mktemp -d) HARNESS_WORKSPACES=$(mktemp -d)
 export DOCKET_URL=$D DOCKET_CREDENTIAL_FILE="$HARNESS_STATE/cred"
 printf '%s' "$CRED" > "$DOCKET_CREDENTIAL_FILE"
 export HARNESS_WRAPPER=/data/repos/docket/harness/wrappers/echo
+export CRED
 
 fail=0
 ok(){ printf '  ok   %s\n' "$*"; }
@@ -149,6 +150,27 @@ NEWCRED="$HARNESS_STATE/fresh-box"
   HARNESS_ECHO_OUTCOME=progressed ./harness/runner >/dev/null 2>&1 )
 [ -s "$NEWCRED" ] && grep -q '^dk_' "$NEWCRED" && ok "enrolled and saved the credential" || bad "no credential written"
 [ "$(moves $E8)" = "offer,accept,update" ] && ok "and worked in the same run" || bad "moves: $(moves $E8)"
+
+echo "== --wait wakes on somebody else's move, not on its own"
+( ./harness/runner --wait; echo "rc $?" > "$HARNESS_STATE/w1" ) & W=$!; sleep 2
+WS_START=$(date +%s)
+EW=$(offer waiter "wake up")
+wait $W 2>/dev/null; WS_END=$(date +%s)
+[ "$(cat "$HARNESS_STATE/w1" 2>/dev/null)" = "rc 0" ] && [ $((WS_END-WS_START)) -le 4 ] \
+  && ok "woke in $((WS_END-WS_START))s on an offer" || bad "did not wake: $(cat "$HARNESS_STATE/w1" 2>/dev/null)"
+
+HARNESS_SWEEP_SECONDS=8 ./harness/runner --wait & W=$!; sleep 2
+WS_START=$(date +%s)
+curl -s -o /dev/null -X POST $D/entries/$EW/moves -H "Authorization: Bearer $CRED" \
+  -H 'Content-Type: application/json' -d '{"move":"update","note":"my own move"}'
+wait $W 2>/dev/null; WS_END=$(date +%s)
+[ $((WS_END-WS_START)) -ge 5 ] && ok "ignored its own move" || bad "woke on its own move"
+
+WS_START=$(date +%s); HARNESS_SWEEP_SECONDS=6 ./harness/runner --wait; RCW=$?; WS_END=$(date +%s)
+[ $RCW -eq 0 ] && [ $((WS_END-WS_START)) -ge 5 ] && ok "the sweep still fires with no events" || bad "sweep: rc=$RCW"
+
+WS_START=$(date +%s); DOCKET_URL=http://127.0.0.1:19299 ./harness/runner --wait >/dev/null 2>&1; RCW=$?
+[ $RCW -ne 0 ] && ok "an unreachable stream is reported, not waited on" || bad "pretended to wait"
 
 echo "== and delivers when nothing disagrees"
 E6=$(offer six "really done")

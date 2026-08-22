@@ -213,3 +213,54 @@ debug_dump() {  # <workspace> <name> <text>
   printf '%s' "$3" > "$1/.harness/raw/$2"
   printf 'raw %s kept at %s/.harness/raw/%s\n' "$2" "$1" "$2" >&2
 }
+
+#: Block until there is plausibly something to do, then return.
+#:
+#: `GET /stream` is Server-Sent Events, already filtered server-side to moves on
+#: conversations this credential is named on -- so *any* move that arrives is
+#: worth a tick, with one exception: our own. The runner posts a move at the end
+#: of nearly every pass, and waking on that would be a loop with no sleep in it.
+#: The stream's `open` frame says which party we are, so the filter needs no
+#: extra call to find out.
+#:
+#: **It returns on a timeout too, and that is not a fallback.** Staleness is the
+#: *absence* of events: nothing will ever be published to say a delegate has gone
+#: quiet for three days. So a sweep on our own clock is still required, and this
+#: is where it comes from -- the stream turns it from every sixty seconds into
+#: every fifteen minutes, which is the whole of what it buys.
+#:
+#: Returns 0 when it waited properly (event or sweep), 1 when the stream could
+#: not be followed at all. A caller that cannot reach the stream must fall back
+#: to sleeping, never to stopping.
+wait_for_work() {
+  local sweep="${HARNESS_SWEEP_SECONDS:-900}" me="" ev="" line data by opened=""
+  [ -z "$DOCKET_KEY" ] && DOCKET_KEY="$(docket_credential)"
+
+  exec 3< <(curl -sN --max-time "$sweep" \
+              -H "Authorization: Bearer $DOCKET_KEY" \
+              -H 'Accept: text/event-stream' "$DOCKET_URL/stream" 2>/dev/null)
+  local pid=$!
+
+  while IFS= read -r line <&3; do
+    case "$line" in
+      "event: "*) ev="${line#event: }" ;;
+      ": "*)      ;;                       # heartbeat: still connected, nothing to report
+      "data: "*)
+        data="${line#data: }"
+        if [ "$ev" = "open" ]; then
+          me="$(printf '%s' "$data" | jq -r '.party // empty' 2>/dev/null)"
+          opened=1
+        elif [ "$ev" = "move" ]; then
+          by="$(printf '%s' "$data" | jq -r '.by // empty' 2>/dev/null)"
+          if [ -n "$by" ] && [ "$by" != "$me" ]; then
+            exec 3<&-; kill "$pid" 2>/dev/null
+            return 0
+          fi
+        fi ;;
+    esac
+  done
+  exec 3<&-; kill "$pid" 2>/dev/null
+  # Opened and then ended = the sweep timer elapsed, which is a proper wait.
+  # Never opened = there is no stream to follow, and the caller must know.
+  [ -n "$opened" ] && return 0 || return 1
+}
