@@ -122,6 +122,37 @@ The last block wins, so an assistant that sketches the format while thinking
 aloud is not taken at its example. A `blocked` without a question is rejected on
 every channel — it is as useless in a response as in a tool call.
 
+## Scheduling one
+
+The runner is **single-pass**: it asks what is owed, works what is due, and
+exits. Something else decides how often.
+
+**Do not let a supervisor's restart provide the cadence.** It is the obvious
+thing to reach for and it quietly spends signals you need elsewhere. Under
+`Restart=always` with a one-minute pass, a fleetix principal reached
+`NRestarts=219` in a few hours — past the 20 at which `fleetix doctor` reports
+*"running, but not for long at a time"* — so a real crash loop could no longer be
+told from an idle one, and uptime sat at about a second forever. The check that
+exists to notice an agent which cannot start was the one thing the arrangement
+destroyed.
+
+Put the loop in the thing you own instead:
+
+```bash
+while :; do
+  timeout "${AGENT_TICK_TIMEOUT:-900}" docket-amplifier-agent || true
+  sleep "${AGENT_INTERVAL:-60}"
+done
+```
+
+Restarts then count only when something died and uptime means how long it has
+been healthy. The `timeout` keeps what exiting used to guarantee: a wedged
+assistant cannot take the loop with it.
+
+A timer (`Type=oneshot` plus `OnUnitInactiveSec=`) is equally correct and says
+the same thing to a supervisor — an activation is not a restart. What is wrong is
+only using `Restart=` as a scheduler.
+
 ## Verifiers
 
 `docs/protocol.md`: *delivering is a claim about the world, so the runner checks
