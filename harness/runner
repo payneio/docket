@@ -50,6 +50,16 @@ exec 9>"$HARNESS_STATE/lock"
 flock -n 9 || { log "$NAME busy, skipping this tick"; exit 0; }
 
 new_run
+# The pass's own span, ended and sent however the pass ends -- including being
+# stopped by the loop's `timeout`, which is why TERM becomes an ordinary exit.
+end_pass() {
+  local rc=$?
+  span harness.pass "$HARNESS_PASS_SPAN" "" "$HARNESS_PASS_START" "$(now_ns)" \
+    "$([ $rc -eq 0 ] && echo ok || echo error)" "$(jq -nc --arg w "$NAME" '{"harness.wrapper":$w}')"
+  flush_spans
+}
+trap end_pass EXIT
+trap 'exit 143' TERM
 ME="$(dk "$DOCKET_URL/me" | jq -r '.party // empty')"
 if [ -z "$ME" ]; then
   # Never guess. An unreachable register is not an empty one, and doing the work
@@ -100,6 +110,8 @@ while read -r entry; do
   [ -z "$entry" ] && continue
   eid="$(printf '%s' "$entry" | jq -r '.id')"
   new_span  # same run, its own span: this entry's moves, and the wrapper's context
+  entry_span="$HARNESS_SPAN_ID"; entry_start="$(now_ns)"
+  links="$(answering "$entry" "$ME")"
   subject="$(printf '%s' "$entry" | jq -r '.subject')"
   state="$(printf '%s' "$entry" | jq -r '.state')"
 
@@ -129,9 +141,15 @@ while read -r entry; do
   # The wrapper is handed the run as the OTel environment carrier, so an
   # assistant that emits traces of its own (Claude Code, with telemetry on)
   # files them under this entry. Context only: nothing about where to send them.
-  out="$(printf '%s' "$request" | TRACEPARENT="$(traceparent)" HARNESS_ROLE=wrapper \
-         "$HARNESS_WRAPPER" 2>>"$runlog")"
+  wrapper_span="$(hex 8)"; wrapper_start="$(now_ns)"
+  out="$(printf '%s' "$request" \
+         | TRACEPARENT="00-$HARNESS_TRACE_ID-$wrapper_span-01" HARNESS_ROLE=wrapper \
+           "$HARNESS_WRAPPER" 2>>"$runlog")"
   rc=$?
+  span harness.wrapper "$wrapper_span" "$entry_span" "$wrapper_start" "$(now_ns)" \
+    "$([ $rc -eq 0 ] && echo ok || echo error)" \
+    "$(jq -nc --arg w "$NAME" --arg e "$eid" --arg rc "$rc" \
+       '{"harness.wrapper":$w, "docket.entry.id":$e, "process.exit.code":$rc}')"
   result="$(result_of "$out")"
   # A wrapper that died, or printed something that is not a result, still has to
   # produce one. What must not happen is nothing: a run that changes the register
@@ -183,6 +201,10 @@ while read -r entry; do
       move "$eid" update "${note:-$outcome}" >/dev/null
       log "$NAME ${eid:0:8} $outcome — left $state, reported" ;;
   esac
+  span harness.entry "$entry_span" "$HARNESS_PASS_SPAN" "$entry_start" "$(now_ns)" \
+    "$([ "$outcome" = failed ] && echo error || echo ok)" \
+    "$(jq -nc --arg e "$eid" --arg s "$state" --arg o "$outcome" \
+       '{"docket.entry.id":$e, "docket.entry.state":$s, "harness.outcome":$o}')" "$links"
 done < <(printf '%s' "$todo" | jq -c '.[]')
 
 log "$NAME done"

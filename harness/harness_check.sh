@@ -45,6 +45,9 @@ export HARNESS_STATE=$(mktemp -d) HARNESS_WORKSPACES=$(mktemp -d)
 export DOCKET_URL=$D DOCKET_CREDENTIAL_FILE="$HARNESS_STATE/cred"
 printf '%s' "$CRED" > "$DOCKET_CREDENTIAL_FILE"
 export HARNESS_WRAPPER=$ROOT/harness/wrappers/echo
+# Spans are exercised in their own section, against a sink of our own. Nowhere
+# else in this script may they reach whatever might be listening on 4318.
+export OTEL_TRACES_EXPORTER=none
 export CRED
 
 fail=0
@@ -112,6 +115,53 @@ chmod +x "$HARNESS_STATE/carrier"
 HARNESS_WRAPPER="$HARNESS_STATE/carrier" ./harness/runner >/dev/null 2>&1
 SEEN="$(cat "$HARNESS_STATE/seen-traceparent" 2>/dev/null)"
 [ "$(printf '%s' "$SEEN" | cut -d- -f2)" = "$(runs $EC)" ] && ok "wrapper's context is the entry's run" || bad "wrapper saw '$SEEN', moves $(runs $EC)"
+
+echo "== a pass sends its spans: pass, entry, wrapper, one trace, no content"
+SINK=$((PORT + 100)); mkdir -p "$HARNESS_STATE/otlp"
+cat > "$HARNESS_STATE/sink.py" <<'PY'
+import http.server, os, sys, time
+out, slow = sys.argv[2], sys.argv[3] == "slow"
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if slow: time.sleep(20)
+        open(os.path.join(out, f"{time.time_ns()}.json"), "wb").write(body)
+        self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+python3 "$HARNESS_STATE/sink.py" $SINK "$HARNESS_STATE/otlp" fast & SINKPID=$!; sleep 0.5
+ES=$(offer thirteen "SPAN-SECRET-TERMS")
+OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$SINK OTEL_SERVICE_NAME=agent.check \
+  HARNESS_WRAPPER="$HARNESS_STATE/carrier" ./harness/runner >/dev/null 2>&1
+for _ in $(seq 20); do ls "$HARNESS_STATE/otlp"/*.json >/dev/null 2>&1 && break; sleep 0.25; done
+kill $SINKPID 2>/dev/null
+P="$(cat "$HARNESS_STATE"/otlp/*.json 2>/dev/null)"
+S="$(printf '%s' "$P" | jq -c '[.resourceSpans[].scopeSpans[].spans[]]')"
+name(){ printf '%s' "$S" | jq -r --arg n "$1" '.[]|select(.name==$n)|'"$2"; }
+[ "$(printf '%s' "$S" | jq -r '[.[].name]|sort|join(",")')" = "harness.entry,harness.pass,harness.wrapper" ] \
+  && ok "three spans: pass, entry, wrapper" || bad "spans: $(printf '%s' "$S" | jq -r '[.[].name]|join(",")')"
+[ "$(printf '%s' "$S" | jq -r '[.[].traceId]|unique|join(",")')" = "$(runs $ES)" ] \
+  && ok "in the trace docket recorded for the moves" || bad "trace mismatch"
+[ "$(name harness.entry .parentSpanId)" = "$(name harness.pass .spanId)" ] \
+  && [ "$(name harness.wrapper .parentSpanId)" = "$(name harness.entry .spanId)" ] \
+  && ok "wrapper under entry under pass" || bad "parents wrong"
+[ "$(cut -d- -f3 "$HARNESS_STATE/seen-traceparent")" = "$(name harness.wrapper .spanId)" ] \
+  && ok "the wrapper's TRACEPARENT is the wrapper span" || bad "wrapper context: $(cat "$HARNESS_STATE/seen-traceparent")"
+printf '%s' "$P" | jq -e '.resourceSpans[0].resource.attributes[]|select(.key=="service.name" and .value.stringValue=="agent.check")' >/dev/null \
+  && ok "named by OTEL_SERVICE_NAME" || bad "service.name missing"
+printf '%s' "$P" | grep -q "SPAN-SECRET-TERMS" && bad "terms leaked into a span" || ok "no terms in any span"
+
+echo "== a wedged collector does not hold a pass up"
+rm -f "$HARNESS_STATE"/otlp/*.json
+python3 "$HARNESS_STATE/sink.py" $SINK "$HARNESS_STATE/otlp" slow & SINKPID=$!; sleep 0.5
+EW2=$(offer fourteen "collector is stuck")
+T0=$(date +%s)
+OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$SINK \
+  HARNESS_ECHO_OUTCOME=progressed ./harness/runner >/dev/null 2>&1
+T1=$(date +%s); kill $SINKPID 2>/dev/null
+[ $((T1 - T0)) -le 4 ] && [ "$(moves $EW2)" = "offer,accept,update" ] \
+  && ok "pass finished in $((T1 - T0))s with the collector wedged" || bad "took $((T1 - T0))s"
 
 echo "== a wrapper that dies still says something"
 E4=$(offer four "will explode")

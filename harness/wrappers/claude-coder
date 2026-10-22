@@ -19,6 +19,7 @@ set -uo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
 
 REQ="$(cat)"
+claude_traces  # its own spans, under the TRACEPARENT the runner set; opt-in
 WS="$(printf '%s' "$REQ" | jq -r '.workspace')"
 STATE="$WS/.harness/claude-coder"; mkdir -p "$STATE"
 SESSION_FILE="$STATE/session"

@@ -102,6 +102,20 @@ its own span id within the pass, and the wrapper is started with that context in
 traces of its own files them under the entry. Context only — nothing about where
 to send spans, and no credential.
 
+The runner also sends spans of its own — `harness.pass`, one `harness.entry` per
+entry (linked to the move it is answering, when docket recorded a span for it),
+and one `harness.wrapper` per invocation, which is the span in `TRACEPARENT` —
+as OTLP/JSON over HTTP, configured by the standard variables:
+`OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4318`),
+`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, and `OTEL_SDK_DISABLED=true` or
+`OTEL_TRACES_EXPORTER=none` to stop. They are sent once, at the end of the pass,
+in the background: a collector that is down never lengthens a pass. They carry
+ids, states and outcomes, never a label, terms, a note or a question.
+
+`HARNESS_ASSISTANT_TRACES=1` turns on Claude Code's own traces (beta) in the
+`claude` and `claude-coder` wrappers, so its model calls and tool calls appear
+under the wrapper span.
+
 ## What the assistant is told
 
 Three channels, and the runner takes the first that answers:

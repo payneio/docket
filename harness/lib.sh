@@ -69,10 +69,75 @@ log() { printf '%s %s\n' "$(ts)" "$*" >&2; }
 HARNESS_TRACE_ID=""
 HARNESS_SPAN_ID=""
 hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
-new_run() { HARNESS_TRACE_ID="$(hex 16)"; HARNESS_SPAN_ID="$(hex 8)"; }
+new_run() {
+  HARNESS_TRACE_ID="$(hex 16)"; HARNESS_SPAN_ID="$(hex 8)"
+  HARNESS_PASS_SPAN="$HARNESS_SPAN_ID"; HARNESS_PASS_START="$(now_ns)"
+}
 new_span() { HARNESS_SPAN_ID="$(hex 8)"; }
 traceparent() {
   [ -n "$HARNESS_TRACE_ID" ] && printf '00-%s-%s-01' "$HARNESS_TRACE_ID" "$HARNESS_SPAN_ID"
+}
+
+#: Spans, for a collector, as OTLP/JSON over plain HTTP -- the standard
+#: encoding, sent with the curl and jq this already depends on, because a tracing
+#: SDK cannot ride along in a single-file installer. Exported unless the standard
+#: switches say not to (`OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none`),
+#: to `OTEL_EXPORTER_OTLP_[TRACES_]ENDPOINT`, default `http://localhost:4318`.
+#:
+#: Collected through the pass and sent once, at its end, in the background under
+#: a short timeout: a collector that is down or wedged must never lengthen a
+#: pass. Attributes are an allow-list -- ids, states, outcomes, names. Never a
+#: subject label, terms, a note or a question: those are the register's, which
+#: scopes who may read them, and a trace store does not.
+HARNESS_SPANS=()
+HARNESS_PASS_SPAN=""
+HARNESS_PASS_START=""
+now_ns() { date +%s%N; }
+traces_on() {
+  [ "${OTEL_SDK_DISABLED:-}" != "true" ] || return 1
+  case "${OTEL_TRACES_EXPORTER:-otlp}" in otlp) ;; *) return 1 ;; esac
+  # This speaks OTLP over HTTP only; a gRPC endpoint would just refuse it.
+  [ "${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-${OTEL_EXPORTER_OTLP_PROTOCOL:-}}" != "grpc" ]
+}
+span() {  # <name> <span-id> <parent-id|""> <start-ns> <end-ns> <ok|error> <attrs-json> [<links-json>]
+  traces_on || return 0
+  HARNESS_SPANS+=("$(jq -nc --arg n "$1" --arg t "$HARNESS_TRACE_ID" --arg s "$2" --arg p "$3" \
+    --arg a "$4" --arg b "$5" --arg st "$6" --argjson at "$7" --argjson l "${8:-[]}" '{
+      traceId:$t, spanId:$s, name:$n, kind:1, startTimeUnixNano:$a, endTimeUnixNano:$b,
+      status:{code:(if $st=="error" then 2 else 1 end)},
+      attributes:[$at|to_entries[]|{key, value:{stringValue:(.value|tostring)}}],
+      links:[$l[]|{traceId:.trace_id, spanId:.span_id}]
+    } + (if $p=="" then {} else {parentSpanId:$p} end)')")
+}
+flush_spans() {
+  traces_on && [ ${#HARNESS_SPANS[@]} -gt 0 ] || return 0
+  local url="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318}/v1/traces}"
+  local resource="service.name=${OTEL_SERVICE_NAME:-docket-harness},process.owner=$(id -un)${OTEL_RESOURCE_ATTRIBUTES:+,$OTEL_RESOURCE_ATTRIBUTES}"
+  printf '%s\n' "${HARNESS_SPANS[@]}" | jq -sc --arg r "$resource" '{resourceSpans:[{
+      resource:{attributes:[$r|split(",")[]|select(contains("="))|capture("^(?<k>[^=]+)=(?<v>.*)$")
+                            |{key:.k, value:{stringValue:.v}}]},
+      scopeSpans:[{scope:{name:"docket-harness"}, spans:.}]}]}' \
+    | timeout 5 curl -s -o /dev/null -X POST "$url" -H 'Content-Type: application/json' --data-binary @- \
+      >/dev/null 2>&1 &
+  HARNESS_SPANS=()
+}
+#: The latest move on an entry made by somebody else, as a span link: what this
+#: work is answering. Present only when docket recorded a span of its own for it.
+answering() {  # <entry-json> <me>
+  printf '%s' "$1" | jq -c --arg me "$2" \
+    '[.moves[] | select(.by != $me and .trace_id != null and .span_id != null)] | last
+     | if . == null then [] else [{trace_id, span_id}] end'
+}
+
+#: Claude Code emits traces of its own (beta), and files them under the
+#: `TRACEPARENT` it is started with when run with `-p`, as the wrappers do. Off
+#: unless asked for, because it is a beta and it is the assistant's telemetry,
+#: not the harness's. Only traces: no metrics or logs unless already configured.
+claude_traces() {
+  [ "${HARNESS_ASSISTANT_TRACES:-}" = 1 ] && traces_on || return 0
+  export CLAUDE_CODE_ENABLE_TELEMETRY=1 CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1 OTEL_TRACES_EXPORTER=otlp
+  export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
+  export OTEL_METRICS_EXPORTER="${OTEL_METRICS_EXPORTER:-none}" OTEL_LOGS_EXPORTER="${OTEL_LOGS_EXPORTER:-none}"
 }
 
 #: Every call carries the credential; nothing else identifies us. Resolved once
