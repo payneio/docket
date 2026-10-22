@@ -175,3 +175,19 @@ async def test_a_rejected_move_is_never_published(owner):
 async def test_the_stream_refuses_a_caller_with_no_token():
     async with client_as(token="") as anonymous:
         assert (await anonymous.get("/stream")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_new_delegate_hears_about_a_redirect(owner, agent):
+    """It never did: the only event described the parent, which the new
+    delegate is not on, so it was offered work and told nothing."""
+    made = (await owner.post("/entries", json={"subject": subject(), "delegate": AGENT})).json()
+    await agent.post(f"/entries/{made['id']}/moves", json={"move": "accept"})
+    response = await _open(_as("mailto:sub@example.invalid"))
+    await agent.post(f"/entries/{made['id']}/moves",
+                     json={"move": "redirect", "to": "mailto:sub@example.invalid"})
+
+    _, payload = (await _frames(response, until="move"))[-1]
+    assert payload is not None
+    assert payload["move"] == "offer" and payload["delegate"] == "mailto:sub@example.invalid"
+    assert payload["entry_id"] != made["id"]

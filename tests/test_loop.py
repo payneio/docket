@@ -100,6 +100,11 @@ async def test_a_redirect_opens_a_child_and_accountability_stays_put(owner, agen
     assert child["delegate"] == "mailto:sub@example.invalid"
     assert child["accountable"] == e["accountable"]  # never moves
     assert child["state"] == "offered"
+    # It opens with an offer, like any other entry, made by whoever handed it on.
+    assert [(m["move"], m["by"], m["to_state"]) for m in child["moves"]] == [
+        ("offer", AGENT, "offered")
+    ]
+    assert child["whose_turn"] == "delegate"
 
 
 async def test_a_third_party_cannot_move_it(owner, agent):

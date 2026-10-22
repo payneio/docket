@@ -296,28 +296,41 @@ async def apply_move(
     move = await _record(session, entry, payload.move, by=mover, identity=identity,
                   before=before, after=after, note=payload.note)
 
+    child: tuple[Entry, Move] | None = None
     if payload.move == "redirect":
         # The chain: whoever is handing it on becomes the requester of the child,
         # and **accountable does not move** — that is the rule delegation exists
         # to keep, and it is why this is copied rather than reassigned.
-        session.add(
-            Entry(
-                subject=entry.subject,
-                subject_label=entry.subject_label,
-                label_as_of=entry.label_as_of,
-                requester=mover,
-                delegate=payload.to,
-                accountable=entry.accountable,
-                state="offered",
-                terms=payload.terms or entry.terms,
-                expected_by=entry.expected_by,
-                parent_id=entry.id,
-            )
+        offered = Entry(
+            subject=entry.subject,
+            subject_label=entry.subject_label,
+            label_as_of=entry.label_as_of,
+            requester=mover,
+            delegate=payload.to,
+            accountable=entry.accountable,
+            state=states.apply(None, "offer", "requester"),
+            terms=payload.terms or entry.terms,
+            expected_by=entry.expected_by,
+            parent_id=entry.id,
         )
+        session.add(offered)
+        await session.flush()
+        # The child is an offer like any other, so it opens with one. It used to
+        # open with nothing: no move in its log, and no event -- the event below
+        # describes the parent, whose parties do not include the new delegate,
+        # so the one party who now owes something was never told. A redirect
+        # was the only way to be offered work without hearing about it.
+        child = (offered, await _record(
+            session, offered, "offer", by=mover, identity=identity,
+            before=None, after=offered.state, note=None,
+        ))
 
     await session.flush()
     await session.refresh(entry)
     events.stage(session, events.from_move(entry, move))
+    if child is not None:
+        await session.refresh(child[0])
+        events.stage(session, events.from_move(*child))
     return entry
 
 
