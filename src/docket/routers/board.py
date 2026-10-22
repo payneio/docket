@@ -36,7 +36,21 @@ from docket.models.entries import Entry
 from docket.schemas.entries import EntryRead, MoveCreate
 
 router = APIRouter(tags=["board"])
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _signed_in(request: Request) -> dict:
+    """Who this browser is, on every page.
+
+    Every page says "you", and a token is not a person: a browser holding an
+    agent's credential reads that agent's board with that agent's buttons, and
+    nothing on the page said so. It happened, and the reader was the owner,
+    wondering why "you" had made moves they never made.
+    """
+    return {"signed_in_as": getattr(request.state, "signed_in_as", None),
+            "is_owner": getattr(request.state, "is_owner", False)}
+
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR), context_processors=[_signed_in])
 
 #: Two identical dots, and something owed between them.
 #:
@@ -132,7 +146,23 @@ async def _names(session: AsyncSession, me: str) -> _Names:
 
 
 async def _identity_or_none(request: Request, session: AsyncSession) -> Identity | None:
-    return await resolve_identity(request, session)
+    """Who is looking, and a name for them that is not "you"."""
+    identity = await resolve_identity(request, session)
+    if identity is not None:
+        request.state.signed_in_as = await _who(session, identity)
+        request.state.is_owner = identity.is_operator
+    return identity
+
+
+async def _who(session: AsyncSession, identity: Identity) -> str:
+    if identity.is_operator:
+        return "the owner"
+    label = None
+    if identity.credential_id is not None:
+        label = (await session.execute(
+            select(Credential.label).where(Credential.id == identity.credential_id)
+        )).scalar_one_or_none()
+    return label or _Names()[identity.party]
 
 
 def _sign_in(request: Request, error: str | None = None) -> HTMLResponse:
@@ -196,6 +226,15 @@ async def sign_in(
     return response
 
 
+@router.post("/board/sign-out", include_in_schema=False)
+async def sign_out() -> Response:
+    """Forget the token. The only way to change who the board acts as, so it is
+    linked from every page rather than left to the browser's cookie settings."""
+    response = RedirectResponse("/board", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(SESSION_COOKIE, httponly=True, samesite="strict")
+    return response
+
+
 @router.get("/board", include_in_schema=False)
 async def board(
     request: Request,
@@ -228,7 +267,6 @@ async def board(
                   for e in await service.ended(session, identity)],
         "names": await _names(session, identity.party),
         "mine": _by_age(mine), "theirs": _by_age(theirs), "watching": _by_age(watching),
-        "owner": identity.is_operator,
         "error": error,
     })
 
@@ -348,7 +386,7 @@ async def _access_page(
 
 async def _owner(request: Request, session: AsyncSession) -> Identity | Response:
     """The owner, or the page to send back instead."""
-    identity = await resolve_identity(request, session)
+    identity = await _identity_or_none(request, session)
     if identity is None:
         return _sign_in(request)
     if not identity.is_operator:

@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% block heading %}sign in{% endblock %}
 {% block body %}
-<p class="terms">A browser cannot present peer credentials, so the board asks for
-the register's token. Agents never come this way — they arrive on the socket and
-the kernel says who they are.</p>
+<p class="terms">Any token works, and the board acts as whoever it names: the
+register's own <code>DOCKET_TOKEN</code> signs you in as the owner, and a party's
+<code>dk_…</code> credential signs you in as that party — with its board and its
+moves. It is kept in a cookie until you sign out.</p>
 <form method="post" action="/board/sign-in">
-  <input type="password" name="token" autofocus placeholder="DOCKET_TOKEN" autocomplete="current-password">
+  <input type="password" name="token" autofocus placeholder="DOCKET_TOKEN or dk_…" autocomplete="current-password">
   <p><button type="submit">sign in</button></p>
 </form>
 {% endblock %}

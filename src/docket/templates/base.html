@@ -22,6 +22,32 @@
   h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em;
        margin: 0 0 2.5rem; color: var(--dim); }
   h1 b { color: var(--ink); font-weight: 600; }
+  h1 a { text-decoration: none; }
+  h1 a:hover b { text-decoration: underline; }
+  header { display: flex; justify-content: space-between; align-items: flex-start;
+           gap: 1rem; margin: 0 0 2.5rem; }
+  header h1 { margin: 0; }
+  .menu { position: relative; font-size: 13px; }
+  .menu summary { list-style: none; cursor: pointer; color: var(--dim);
+                  -webkit-tap-highlight-color: transparent;
+                  padding: 0 .3rem; border: 1px solid transparent; border-radius: 3px;
+                  line-height: 1.4; user-select: none; }
+  .menu summary::-webkit-details-marker { display: none; }
+  .menu summary:hover, .menu[open] summary { border-color: var(--rule); color: var(--ink); }
+  .menu nav { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 1;
+              min-width: 14rem; background: var(--card); border: 1px solid var(--rule);
+              border-radius: 3px; padding: .3rem 0; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .menu nav a { display: block; padding: .3rem .9rem; text-decoration: none; }
+  .menu nav a:hover { background: var(--page); }
+  .menu nav a.here { font-weight: 600; }
+  @media (max-width: 40rem) {
+    .menu summary { font-size: 20px; padding: .2rem .6rem; margin: -.4rem -.3rem 0 0; }
+    .menu nav a { padding: .6rem 1rem; }
+  }
+  .menu .whoami { padding: .3rem .9rem .5rem; font-size: 12px; color: var(--faint);
+                  border-bottom: 1px solid var(--rule); margin-bottom: .3rem; }
+  .menu .whoami b { color: var(--ink); font-weight: 600; }
+  .menu form { padding: .4rem .9rem .2rem; border-top: 1px solid var(--rule); margin-top: .3rem; }
   h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
        color: var(--dim); font-weight: 600;
        margin: 2.5rem 0 .75rem; padding-bottom: .4rem; border-bottom: 1px solid var(--rule); }
@@ -81,7 +107,27 @@
   textarea { margin-bottom: .4rem; }
 </style>
 <main>
-  <h1><b>docket</b> &nbsp;›&nbsp; {% block heading %}{{ heading }}{% endblock %}</h1>
+  <header>
+    <h1><a href="/"><b>docket</b></a> &nbsp;›&nbsp; {% block heading %}{{ heading }}{% endblock %}</h1>
+    {% if signed_in_as %}{% set here = request.url.path %}
+    <details class="menu">
+      <summary aria-label="menu">&#9776;</summary>
+      <nav>
+        <div class="whoami">signed in as <b>{{ signed_in_as }}</b></div>
+        <a href="/board"{% if here == '/board' %} class="here"{% endif %}>board</a>
+        <a href="/board/activity"{% if here == '/board/activity' %} class="here"{% endif %}>activity</a>
+        {% if is_owner %}<a href="/board/access"{% if here == '/board/access' %} class="here"{% endif %}>access</a>{% endif %}
+        <form method="post" action="/board/sign-out"><button type="submit">sign out</button></form>
+      </nav>
+    </details>
+    <script>
+      // <details> only closes from its own summary; a menu should also close
+      // when you tap or click anywhere else, or press Escape.
+      const menu = document.querySelector(".menu");
+      document.addEventListener("click", e => { if (!menu.contains(e.target)) menu.open = false; });
+      document.addEventListener("keydown", e => { if (e.key === "Escape") menu.open = false; });
+    </script>{% endif %}
+  </header>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   {% block body %}{% endblock %}
 </main>

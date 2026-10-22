@@ -10,7 +10,7 @@ from urllib.parse import unquote
 
 from docket.auth import SESSION_COOKIE
 from docket.config import settings
-from tests.conftest import AGENT, client_as, subject
+from tests.conftest import AGENT, client_as, issue, subject
 
 
 async def _offer(owner, **kw):
@@ -187,3 +187,40 @@ async def test_activity_shows_only_what_you_are_party_to(owner, agent):
     async with client_as(outsider) as stranger:
         page = (await stranger.get("/board/activity")).text
     assert "Private business" not in page and "mine to do" not in page
+
+
+async def test_every_page_says_who_you_are_signed_in_as(owner):
+    """"You" is whoever the token names. A browser holding an agent's credential
+    must say so, or its owner reads the agent's moves as their own."""
+    token = await issue(AGENT, "cos on civil")
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": token})
+        for path in ("/board", "/board/activity"):
+            page = (await b.get(path)).text
+            assert "signed in as <b>cos on civil</b>" in page, path
+
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": settings.token})
+        assert "signed in as <b>the owner</b>" in (await b.get("/board")).text
+
+
+async def test_signing_out_forgets_the_token(owner):
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": settings.token})
+        r = await b.post("/board/sign-out")
+        assert r.status_code == 303
+        assert SESSION_COOKIE not in b.cookies
+        assert (await b.get("/board")).status_code == 401
+
+
+async def test_the_menu_shows_access_only_to_the_owner(owner):
+    token = await issue(AGENT, "cos on civil")
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": token})
+        page = (await b.get("/board")).text
+        assert 'href="/board/activity"' in page and 'href="/board/access"' not in page
+
+    async with _browser() as b:
+        await b.post("/board/sign-in", data={"token": settings.token})
+        for path in ("/board", "/board/activity", "/board/access"):
+            assert 'href="/board/access"' in (await b.get(path)).text, path
