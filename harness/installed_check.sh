@@ -66,6 +66,31 @@ env -i PATH="$PATH" HOME="$HOMEDIR" DOCKET_URL=$D \
 grep -q "cannot reach docket" /tmp/installed2.log && bad "lost its identity" || ok "still itself with no DOCKET_API_KEY"
 [ "$(curl -s $D/credentials -H "$A" | jq 'length')" = "1" ] && ok "one credential, not one per run" || bad "minted extras"
 
+echo "== --arm turns fleetix's stub into the loop, and runs"
+printf '#!/bin/sh\n# fleetix:unarmed\nexit 78\n' > "$HOMEDIR/agent"; chmod 700 "$HOMEDIR/agent"
+env -i PATH="$PATH" HOME="$HOMEDIR" ./harness/install.sh --harness echo --dir "$BIN" --arm >/tmp/arm.log 2>&1
+grep -q "^armed " /tmp/arm.log && ok "armed the stub" || bad "did not arm: $(tail -2 /tmp/arm.log)"
+[ "$(stat -c %a "$HOMEDIR/agent")" = "700" ] && ok "mode 700, as fleetix doctor checks" || bad "mode $(stat -c %a "$HOMEDIR/agent")"
+grep -q "RUNNER=\"$BIN/docket-echo\"" "$HOMEDIR/agent" && ok "names the installed runner" || bad "runner not named"
+[ "$(stat -c %a "$HOMEDIR/.config/agent/env")" = "600" ] && ok "settings file, mode 600" || bad "no settings file"
+
+printf 'DOCKET_URL=%s\nHARNESS_WORKSPACES=%s\nHARNESS_STATE=%s\nHARNESS_ECHO_OUTCOME=progressed\n' \
+  "$D" "$WSDIR" "$HOMEDIR/.harness" > "$HOMEDIR/.config/agent/env"
+EA=$(curl -s -X POST $D/entries -H "$A" -H 'Content-Type: application/json' \
+  -d "{\"subject\":\"test:mark:task:armed\",\"delegate\":\"$AGENT\",\"terms\":\"from the loop\"}" | jq -r .id)
+env -i PATH="$PATH" HOME="$HOMEDIR" timeout 6 "$HOMEDIR/agent" >/dev/null 2>&1
+MA=$(curl -s $D/entries/$EA -H "$A" | jq -r '[.moves[].move]|join(",")')
+[ "$MA" = "offer,accept,update" ] && ok "the armed agent worked an entry, settings from its env file" || bad "moves: $MA"
+
+echo "== a hand-written agent is not replaced without --force"
+printf '#!/bin/sh\n# mine\nexit 0\n' > "$HOMEDIR/agent"
+echo 'DOCKET_URL=http://keep.me.invalid' > "$HOMEDIR/.config/agent/env"
+env -i PATH="$PATH" HOME="$HOMEDIR" ./harness/install.sh --harness echo --dir "$BIN" --arm >/tmp/arm.log 2>&1
+[ $? -ne 0 ] && grep -q "# mine" "$HOMEDIR/agent" && ok "refused, and left it alone" || bad "replaced a hand-written agent"
+env -i PATH="$PATH" HOME="$HOMEDIR" ./harness/install.sh --harness echo --dir "$BIN" --arm --force >/tmp/arm.log 2>&1
+grep -q "# mine" "$HOMEDIR/agent.bak" && grep -q "^armed " /tmp/arm.log && ok "--force replaced it and kept agent.bak" || bad "force: $(tail -2 /tmp/arm.log)"
+grep -q "keep.me.invalid" "$HOMEDIR/.config/agent/env" && ok "existing settings untouched" || bad "settings overwritten"
+
 kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 uv run python -c "
 import asyncio

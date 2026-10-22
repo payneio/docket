@@ -26,14 +26,19 @@ fi
 rm -f /tmp/install.sh.was
 echo "up to date"
 
-# The runner against a real server: every outcome, the stream, and that a pass
-# is one run. The server's own access log is noise unless something failed.
-printf '\n== harness, end to end\n'
-log="$(mktemp)"
-if ./harness/harness_check.sh >"$log" 2>&1; then
-  grep -cE '^  ok ' "$log" | xargs printf '%s checks ok\n'; rm -f "$log"
-else
-  grep -E '^==|^  (ok|FAIL)' "$log" >&2; echo "full output: $log" >&2; exit 1
-fi
+# The runner against a real server -- every outcome, the stream, a pass being
+# one run -- and then the installed bundle, the way a new box gets it, armed.
+# The server's own access log is noise unless something failed.
+end_to_end() {  # <title> <script>
+  printf '\n== %s\n' "$1"
+  local log; log="$(mktemp)"
+  if "$2" >"$log" 2>&1; then
+    grep -cE '^  ok ' "$log" | xargs printf '%s checks ok\n'; rm -f "$log"
+  else
+    grep -E '^==|^  (ok|FAIL)' "$log" >&2; echo "full output: $log" >&2; exit 1
+  fi
+}
+end_to_end "harness, end to end"  ./harness/harness_check.sh
+end_to_end "installed, and armed" ./harness/installed_check.sh
 
 printf '\nAll checks passed.\n'

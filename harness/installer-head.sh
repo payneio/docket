@@ -4,6 +4,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh \
 #     | bash -s -- --harness claude-code
 #   ./install.sh --harness pi --dir ~/bin
+#   sudo -u coder bash -lc 'curl … | bash -s -- --harness claude-coder --arm'
+#
+# --arm also writes ~/agent, the loop a fleetix principal's unit runs, and a
+# ~/.config/agent/env for its settings, then restarts the unit. It replaces only
+# fleetix's unarmed stub; --force replaces anything, keeping ~/agent.bak.
 #
 # Writes ONE executable that contains everything: the runner, its library, and
 # the wrapper for the assistant you named. It re-executes itself to invoke the
@@ -16,6 +21,8 @@ set -euo pipefail
 HARNESS=""
 DEST="${HARNESS_DIR:-$HOME/.local/bin}"
 NAME=""
+ARM=""
+FORCE=""
 
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
@@ -25,8 +32,10 @@ while [ $# -gt 0 ]; do
     --dir)     DEST="${2:-}"; shift 2 ;;
     --name)    NAME="${2:-}"; shift 2 ;;
     --list)    LIST=1; shift ;;
+    --arm)     ARM=1; shift ;;
+    --force)   FORCE=1; shift ;;
     -h|--help)
-      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1" ;;
   esac
 done

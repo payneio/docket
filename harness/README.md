@@ -146,8 +146,22 @@ Prove it can reach the register and act as the right party **before** installing
 an assistant. `echo` runs no model, so the answer costs nothing and the failure,
 if there is one, is unambiguous.
 
-Then install the assistant for that account, install the harness for it, and
-write `~/agent`. Keep `~/agent` at mode `700` — `fleetix doctor` checks it.
+Then install the assistant for that account, and install the harness for it
+with `--arm`:
+
+```bash
+sudo -u <name> bash -lc 'curl -fsSL <install.sh> | bash -s -- --harness <assistant> --arm'
+```
+
+`--arm` replaces fleetix's unarmed stub at `~/agent` with the standard loop (see
+*Scheduling one*), mode `700` as `fleetix doctor` checks, and restarts
+`fleet-agent`. What is particular to the principal — the model, a proxy
+endpoint, pacing — goes in `~/.config/agent/env`, written once with commented
+defaults and never overwritten; the loop reads it on every start. Secrets stay in
+fleetix's `~/.config/fleet/env`, which the env file may name
+(`ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}`). An `~/agent` that is not the stub is
+somebody's decision, so `--arm` refuses it unless given `--force`, which keeps
+the old one as `~/agent.bak`.
 
 The three on this machine, as examples of the same four steps:
 
@@ -171,7 +185,8 @@ told from an idle one, and uptime sat at about a second forever. The check that
 exists to notice an agent which cannot start was the one thing the arrangement
 destroyed.
 
-Put the loop in the thing you own instead:
+Put the loop in the thing you own instead — `install.sh --arm` writes this,
+as `harness/agent-loop`:
 
 ```bash
 while :; do

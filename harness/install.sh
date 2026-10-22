@@ -4,6 +4,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install.sh \
 #     | bash -s -- --harness claude-code
 #   ./install.sh --harness pi --dir ~/bin
+#   sudo -u coder bash -lc 'curl … | bash -s -- --harness claude-coder --arm'
+#
+# --arm also writes ~/agent, the loop a fleetix principal's unit runs, and a
+# ~/.config/agent/env for its settings, then restarts the unit. It replaces only
+# fleetix's unarmed stub; --force replaces anything, keeping ~/agent.bak.
 #
 # Writes ONE executable that contains everything: the runner, its library, and
 # the wrapper for the assistant you named. It re-executes itself to invoke the
@@ -16,6 +21,8 @@ set -euo pipefail
 HARNESS=""
 DEST="${HARNESS_DIR:-$HOME/.local/bin}"
 NAME=""
+ARM=""
+FORCE=""
 
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
@@ -25,8 +32,10 @@ while [ $# -gt 0 ]; do
     --dir)     DEST="${2:-}"; shift 2 ;;
     --name)    NAME="${2:-}"; shift 2 ;;
     --list)    LIST=1; shift ;;
+    --arm)     ARM=1; shift ;;
+    --force)   FORCE=1; shift ;;
     -h|--help)
-      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1" ;;
   esac
 done
@@ -755,6 +764,77 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 EOF_src_tool
+}
+
+src_agent_loop() { cat <<'EOF_src_agent_loop'
+#!/usr/bin/env bash
+# The agent for this principal. Written by `install.sh --arm`; re-arm rather
+# than edit, and put anything particular to this principal in
+# ~/.config/agent/env, which this reads on every start.
+#
+# fleetix says what work arrives and how it is reported; *this file* decides
+# what actually runs, and it is the same file for every principal -- what
+# differs is the runner it names and the settings beside it.
+#
+# **The loop is here, not in systemd's restart machinery.** The runner is
+# single-pass by design. Letting `Restart=always` supply the cadence polls
+# correctly and spends every signal the unit carries: NRestarts passes the 20 at
+# which `fleetix doctor` reports "running, but not for long at a time", so a
+# real crash loop stops being distinguishable from an idle one, and uptime sits
+# at a second forever. Looping here gives both back their meaning.
+set -uo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+# This principal's settings: the register's address, the assistant's model and
+# endpoint, telemetry. Shell, so a value may name a secret the unit loaded from
+# fleetix's own env file (`ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}`) without the
+# secret being written here.
+if [ -r "$HOME/.config/agent/env" ]; then
+  set -a; . "$HOME/.config/agent/env"; set +a
+fi
+export DOCKET_URL="${DOCKET_URL:-http://127.0.0.1:9006}"
+export HARNESS_WORKSPACES="${HARNESS_WORKSPACES:-$HOME/workspaces}"
+
+RUNNER="@RUNNER@"
+[ -x "$RUNNER" ] || { echo "no runner at $RUNNER" >&2; exit 78; }
+
+while :; do
+  # Bounded, so a wedged assistant cannot take the loop with it.
+  timeout "${AGENT_TICK_TIMEOUT:-1800}" "$RUNNER" || {
+    rc=$?
+    [ $rc -eq 124 ] && echo "$(date -Is) tick exceeded ${AGENT_TICK_TIMEOUT:-1800}s and was stopped" >&2
+  }
+  # Follow the register rather than asking it every minute. Returns as soon as
+  # somebody else moves something we are named on, and on its own timer anyway
+  # -- staleness is the absence of events and no move announces it. A stream we
+  # cannot follow degrades to polling, never to silence.
+  "$RUNNER" --wait || sleep "${AGENT_INTERVAL:-60}"
+done
+EOF_src_agent_loop
+}
+
+src_agent_env() { cat <<'EOF_src_agent_env'
+# This principal's settings, read by ~/agent on every start (as shell, with
+# `set -a`, so every assignment is exported). Written once by
+# `install.sh --arm` and never overwritten; edit it, then
+#   systemctl --user restart fleet-agent
+#
+# Secrets do not go here. fleetix keeps them in ~/.config/fleet/env, which the
+# unit loads first, so a value here may name one: ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}
+
+# The register. The credential is at ~/.docket/credential and the runner finds
+# it without being told.
+DOCKET_URL=http://127.0.0.1:9006
+
+# The assistant -- model, endpoint, anything its wrapper reads.
+#CLAUDE_MODEL=sonnet
+#ANTHROPIC_BASE_URL=http://127.0.0.1:4000
+
+# Pacing. A pass is stopped after AGENT_TICK_TIMEOUT seconds; AGENT_INTERVAL is
+# the fallback sleep when the stream cannot be followed.
+#AGENT_TICK_TIMEOUT=1800
+#AGENT_INTERVAL=60
+EOF_src_agent_env
 }
 
 src_wrapper_amplifier() { cat <<'EOF_src_wrapper_amplifier'
@@ -1496,6 +1576,42 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
 chmod +x "$OUT"
 
 printf 'installed %s\n' "$OUT"
+
+# Arming: the loop a fleetix principal runs. fleetix writes ~/agent once, as a
+# stub that exits 78 until something replaces it, and leaves replacing it to an
+# installer -- this one. Its contract (fleetix docs/contract.md) is the whole
+# interface: the path, mode 0700, the `# fleetix:unarmed` marker, a restart.
+if [ -n "$ARM" ]; then
+  AGENT="$HOME/agent"
+  if [ -e "$AGENT" ] && [ "$(sed -n 2p "$AGENT")" != "# fleetix:unarmed" ]; then
+    # A hand-written agent is somebody's decision; never replace one silently.
+    [ -n "$FORCE" ] || die "$AGENT is not fleetix's unarmed stub; --force replaces it (kept as $AGENT.bak)"
+    cp -p "$AGENT" "$AGENT.bak"
+    printf 'kept the previous agent as %s\n' "$AGENT.bak"
+  fi
+  src_agent_loop | sed "s|@RUNNER@|$OUT|" > "$AGENT.new" && chmod 0700 "$AGENT.new" \
+    && mv -f "$AGENT.new" "$AGENT" || die "could not write $AGENT"
+  printf 'armed %s -> %s\n' "$AGENT" "$NAME"
+
+  ENVFILE="$HOME/.config/agent/env"
+  if [ ! -e "$ENVFILE" ]; then
+    mkdir -p "$(dirname "$ENVFILE")" && (umask 077; src_agent_env > "$ENVFILE") \
+      || die "could not write $ENVFILE"
+    printf 'settings in %s\n' "$ENVFILE"
+  fi
+
+  # Only where fleetix put a unit. Anywhere else there is nothing to restart,
+  # and `systemctl --user` would be talking to somebody else's manager.
+  if [ -f "$HOME/.config/systemd/user/fleet-agent.service" ]; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if systemctl --user restart fleet-agent; then
+      printf 'restarted fleet-agent\n'
+    else
+      printf 'install: could not restart fleet-agent; it will pick this up on its next start\n' >&2
+    fi
+  fi
+  exit 0
+fi
 case ":$PATH:" in
   *":$DEST:"*) ;;
   *) printf 'note: %s is not on your PATH\n' "$DEST" >&2 ;;

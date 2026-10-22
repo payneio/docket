@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The agent for this principal. Written by `install.sh --arm`; re-arm rather
+# than edit, and put anything particular to this principal in
+# ~/.config/agent/env, which this reads on every start.
+#
+# fleetix says what work arrives and how it is reported; *this file* decides
+# what actually runs, and it is the same file for every principal -- what
+# differs is the runner it names and the settings beside it.
+#
+# **The loop is here, not in systemd's restart machinery.** The runner is
+# single-pass by design. Letting `Restart=always` supply the cadence polls
+# correctly and spends every signal the unit carries: NRestarts passes the 20 at
+# which `fleetix doctor` reports "running, but not for long at a time", so a
+# real crash loop stops being distinguishable from an idle one, and uptime sits
+# at a second forever. Looping here gives both back their meaning.
+set -uo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+# This principal's settings: the register's address, the assistant's model and
+# endpoint, telemetry. Shell, so a value may name a secret the unit loaded from
+# fleetix's own env file (`ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}`) without the
+# secret being written here.
+if [ -r "$HOME/.config/agent/env" ]; then
+  set -a; . "$HOME/.config/agent/env"; set +a
+fi
+export DOCKET_URL="${DOCKET_URL:-http://127.0.0.1:9006}"
+export HARNESS_WORKSPACES="${HARNESS_WORKSPACES:-$HOME/workspaces}"
+
+RUNNER="@RUNNER@"
+[ -x "$RUNNER" ] || { echo "no runner at $RUNNER" >&2; exit 78; }
+
+while :; do
+  # Bounded, so a wedged assistant cannot take the loop with it.
+  timeout "${AGENT_TICK_TIMEOUT:-1800}" "$RUNNER" || {
+    rc=$?
+    [ $rc -eq 124 ] && echo "$(date -Is) tick exceeded ${AGENT_TICK_TIMEOUT:-1800}s and was stopped" >&2
+  }
+  # Follow the register rather than asking it every minute. Returns as soon as
+  # somebody else moves something we are named on, and on its own timer anyway
+  # -- staleness is the absence of events and no move announces it. A stream we
+  # cannot follow degrades to polling, never to silence.
+  "$RUNNER" --wait || sleep "${AGENT_INTERVAL:-60}"
+done

@@ -113,6 +113,42 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
 chmod +x "$OUT"
 
 printf 'installed %s\n' "$OUT"
+
+# Arming: the loop a fleetix principal runs. fleetix writes ~/agent once, as a
+# stub that exits 78 until something replaces it, and leaves replacing it to an
+# installer -- this one. Its contract (fleetix docs/contract.md) is the whole
+# interface: the path, mode 0700, the `# fleetix:unarmed` marker, a restart.
+if [ -n "$ARM" ]; then
+  AGENT="$HOME/agent"
+  if [ -e "$AGENT" ] && [ "$(sed -n 2p "$AGENT")" != "# fleetix:unarmed" ]; then
+    # A hand-written agent is somebody's decision; never replace one silently.
+    [ -n "$FORCE" ] || die "$AGENT is not fleetix's unarmed stub; --force replaces it (kept as $AGENT.bak)"
+    cp -p "$AGENT" "$AGENT.bak"
+    printf 'kept the previous agent as %s\n' "$AGENT.bak"
+  fi
+  src_agent_loop | sed "s|@RUNNER@|$OUT|" > "$AGENT.new" && chmod 0700 "$AGENT.new" \
+    && mv -f "$AGENT.new" "$AGENT" || die "could not write $AGENT"
+  printf 'armed %s -> %s\n' "$AGENT" "$NAME"
+
+  ENVFILE="$HOME/.config/agent/env"
+  if [ ! -e "$ENVFILE" ]; then
+    mkdir -p "$(dirname "$ENVFILE")" && (umask 077; src_agent_env > "$ENVFILE") \
+      || die "could not write $ENVFILE"
+    printf 'settings in %s\n' "$ENVFILE"
+  fi
+
+  # Only where fleetix put a unit. Anywhere else there is nothing to restart,
+  # and `systemctl --user` would be talking to somebody else's manager.
+  if [ -f "$HOME/.config/systemd/user/fleet-agent.service" ]; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if systemctl --user restart fleet-agent; then
+      printf 'restarted fleet-agent\n'
+    else
+      printf 'install: could not restart fleet-agent; it will pick this up on its next start\n' >&2
+    fi
+  fi
+  exit 0
+fi
 case ":$PATH:" in
   *":$DEST:"*) ;;
   *) printf 'note: %s is not on your PATH\n' "$DEST" >&2 ;;

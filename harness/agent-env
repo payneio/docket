@@ -1,0 +1,20 @@
+# This principal's settings, read by ~/agent on every start (as shell, with
+# `set -a`, so every assignment is exported). Written once by
+# `install.sh --arm` and never overwritten; edit it, then
+#   systemctl --user restart fleet-agent
+#
+# Secrets do not go here. fleetix keeps them in ~/.config/fleet/env, which the
+# unit loads first, so a value here may name one: ANTHROPIC_API_KEY=${LITELLM_MASTER_KEY}
+
+# The register. The credential is at ~/.docket/credential and the runner finds
+# it without being told.
+DOCKET_URL=http://127.0.0.1:9006
+
+# The assistant -- model, endpoint, anything its wrapper reads.
+#CLAUDE_MODEL=sonnet
+#ANTHROPIC_BASE_URL=http://127.0.0.1:4000
+
+# Pacing. A pass is stopped after AGENT_TICK_TIMEOUT seconds; AGENT_INTERVAL is
+# the fallback sleep when the stream cannot be followed.
+#AGENT_TICK_TIMEOUT=1800
+#AGENT_INTERVAL=60
