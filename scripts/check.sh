@@ -26,4 +26,14 @@ fi
 rm -f /tmp/install.sh.was
 echo "up to date"
 
+# The runner against a real server: every outcome, the stream, and that a pass
+# is one run. The server's own access log is noise unless something failed.
+printf '\n== harness, end to end\n'
+log="$(mktemp)"
+if ./harness/harness_check.sh >"$log" 2>&1; then
+  grep -cE '^  ok ' "$log" | xargs printf '%s checks ok\n'; rm -f "$log"
+else
+  grep -E '^==|^  (ok|FAIL)' "$log" >&2; echo "full output: $log" >&2; exit 1
+fi
+
 printf '\nAll checks passed.\n'

@@ -92,6 +92,16 @@ convention. The runner stores nothing on a wrapper's behalf, which is what lets
 `pi` store nothing at all: it can derive a stable session id from the subject and
 let its own `--session-id` do the work.
 
+### `TRACEPARENT`
+
+Each pass is one W3C trace, generated fresh (never inherited from the loop that
+started it), and every call the runner makes to docket carries it — so a pass's
+moves, and any question it opens, show on the board as one run. Each entry gets
+its own span id within the pass, and the wrapper is started with that context in
+`TRACEPARENT`, the OpenTelemetry environment carrier: an assistant that emits
+traces of its own files them under the entry. Context only — nothing about where
+to send spans, and no credential.
+
 ## What the assistant is told
 
 Three channels, and the runner takes the first that answers:

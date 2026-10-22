@@ -49,6 +49,7 @@ mkdir -p "$HARNESS_STATE/logs" "$HARNESS_WORKSPACES" || exit 1
 exec 9>"$HARNESS_STATE/lock"
 flock -n 9 || { log "$NAME busy, skipping this tick"; exit 0; }
 
+new_run
 ME="$(dk "$DOCKET_URL/me" | jq -r '.party // empty')"
 if [ -z "$ME" ]; then
   # Never guess. An unreachable register is not an empty one, and doing the work
@@ -98,6 +99,7 @@ ask() {  # <entry-json> <question> -> question entry id
 while read -r entry; do
   [ -z "$entry" ] && continue
   eid="$(printf '%s' "$entry" | jq -r '.id')"
+  new_span  # same run, its own span: this entry's moves, and the wrapper's context
   subject="$(printf '%s' "$entry" | jq -r '.subject')"
   state="$(printf '%s' "$entry" | jq -r '.state')"
 
@@ -124,7 +126,11 @@ while read -r entry; do
   runlog="$HARNESS_STATE/logs/$(date +%Y%m%d-%H%M%S)-${eid:0:8}.log"
 
   log "$NAME -> $NAME wrapper for ${eid:0:8} ($state) in $ws"
-  out="$(printf '%s' "$request" | HARNESS_ROLE=wrapper "$HARNESS_WRAPPER" 2>>"$runlog")"
+  # The wrapper is handed the run as the OTel environment carrier, so an
+  # assistant that emits traces of its own (Claude Code, with telemetry on)
+  # files them under this entry. Context only: nothing about where to send them.
+  out="$(printf '%s' "$request" | TRACEPARENT="$(traceparent)" HARNESS_ROLE=wrapper \
+         "$HARNESS_WRAPPER" 2>>"$runlog")"
   rc=$?
   result="$(result_of "$out")"
   # A wrapper that died, or printed something that is not a result, still has to

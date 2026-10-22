@@ -5,14 +5,19 @@
 # and no waiting -- which is the point of the wrapper contract being a subprocess
 # and a JSON shape. Runs against `docket_test` on its own port, so it is safe
 # beside a live service, and refuses to start if it is pointed at the register.
+# Checks the checkout it lives in, so a worktree tests its own code;
+# `DOCKET_TEST_DATABASE_URL` and `HARNESS_CHECK_PORT` move it out of the way of
+# another checkout running the same thing.
 #
 #   ./harness/harness_check.sh
 set -uo pipefail
-cd /data/repos/docket
-PROD="$(grep -oP '(?<=^DOCKET_DATABASE_URL=).*' .env)"
-export DOCKET_DATABASE_URL="${PROD%/*}/docket_test"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; export ROOT
+cd "$ROOT"
+PROD="$(grep -oP '(?<=^DOCKET_DATABASE_URL=).*' .env | tr -d "'\"")"
+export DOCKET_DATABASE_URL="${DOCKET_TEST_DATABASE_URL:-${PROD%/*}/docket_test}"
 [ "$DOCKET_DATABASE_URL" = "$PROD" ] && { echo "refusing to run against the register"; exit 2; }
-export DOCKET_TOKEN=harness-check-token DOCKET_PORT=19007
+PORT="${HARNESS_CHECK_PORT:-19007}"
+export DOCKET_TOKEN=harness-check-token DOCKET_PORT=$PORT
 export DOCKET_OWNER_PARTY="wild-life:person:aaaaaaaa-0000-0000-0000-000000000001"
 uv run python -c "
 import os, psycopg
@@ -26,7 +31,7 @@ uv run alembic upgrade head >/dev/null 2>&1
 
 uv run docket & SRV=$!
 trap 'kill $SRV 2>/dev/null' EXIT
-D=http://127.0.0.1:19007
+D=http://127.0.0.1:$PORT
 for _ in $(seq 60); do curl -sf $D/health >/dev/null 2>&1 && break; sleep 0.25; done
 curl -sf $D/health >/dev/null 2>&1 || { echo "server never came up on $D"; exit 1; }
 
@@ -39,7 +44,7 @@ CRED=$(curl -s -X POST $D/credentials -H "$A" -H 'Content-Type: application/json
 export HARNESS_STATE=$(mktemp -d) HARNESS_WORKSPACES=$(mktemp -d)
 export DOCKET_URL=$D DOCKET_CREDENTIAL_FILE="$HARNESS_STATE/cred"
 printf '%s' "$CRED" > "$DOCKET_CREDENTIAL_FILE"
-export HARNESS_WRAPPER=/data/repos/docket/harness/wrappers/echo
+export HARNESS_WRAPPER=$ROOT/harness/wrappers/echo
 export CRED
 
 fail=0
@@ -50,6 +55,9 @@ offer(){ curl -s -X POST $D/entries -H "$A" -H 'Content-Type: application/json' 
 state(){ curl -s "$D/entries/${1:?}" -H "$A" | jq -r .state; }
 lastnote(){ curl -s "$D/entries/${1:?}" -H "$A" | jq -r '.moves|last|.note'; }
 moves(){ curl -s "$D/entries/${1:?}" -H "$A" | jq -r '[.moves[].move]|join(",")'; }
+#: The trace ids of an entry's moves after the offer, de-duplicated: one id
+#: means every move the runner made on it was one run.
+runs(){ curl -s "$D/entries/${1:?}" -H "$A" | jq -r '[.moves[1:][].trace_id]|unique|join(",")'; }
 
 echo "== a wrapper that works: offered -> accepted, and only because it worked"
 E=$(offer one "do the thing")
@@ -77,6 +85,34 @@ B=$(curl -s $D/entries/$E3 -H "$A")
 Q=$(curl -s "$D/entries?subject=test:mark:task:three" -H "$A" | jq -r '[.[]|select(.delegate=="'"$DOCKET_OWNER_PARTY"'")]|first|.terms')
 [ "$Q" = "Which of the two approaches did you want?" ] && ok "question offered back to the requester" || bad "question: $Q"
 
+echo "== a pass is one run: its moves, and the question it opened"
+R3="$(runs $E3)"
+QR=$(curl -s "$D/entries?subject=test:mark:task:three" -H "$A" | jq -r '[.[]|select(.delegate=="'"$DOCKET_OWNER_PARTY"'")]|first|.moves[0].trace_id')
+[[ "$R3" =~ ^[0-9a-f]{32}$ ]] && ok "accept and update share one trace" || bad "traces: '$R3'"
+[ "$QR" = "$R3" ] && ok "the question was opened in the same run" || bad "question trace: $QR vs $R3"
+[ "$(runs $E)" != "$R3" ] && ok "another pass is another run" || bad "two passes shared a trace"
+
+echo "== two entries in one pass are one run, and an inherited trace is not reused"
+EA=$(offer ten "first of two"); EB=$(offer eleven "second of two")
+TRACEPARENT="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" \
+  HARNESS_ECHO_OUTCOME=progressed ./harness/runner >/dev/null 2>&1
+RA="$(runs $EA)"; RB="$(runs $EB)"
+[ -n "$RA" ] && [ "$RA" = "$RB" ] && ok "both entries in one run" || bad "traces: $RA / $RB"
+[ "$RA" != "0af7651916cd43dd8448eb211c80319c" ] && ok "a fresh trace, not the loop's" || bad "reused the inherited trace"
+
+echo "== the wrapper is handed the run, as TRACEPARENT"
+EC=$(offer twelve "carry the context")
+cat > "$HARNESS_STATE/carrier" <<'W'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s' "${TRACEPARENT:-}" > "$HARNESS_STATE/seen-traceparent"
+jq -nc '{outcome:"progressed",note:"looked"}'
+W
+chmod +x "$HARNESS_STATE/carrier"
+HARNESS_WRAPPER="$HARNESS_STATE/carrier" ./harness/runner >/dev/null 2>&1
+SEEN="$(cat "$HARNESS_STATE/seen-traceparent" 2>/dev/null)"
+[ "$(printf '%s' "$SEEN" | cut -d- -f2)" = "$(runs $EC)" ] && ok "wrapper's context is the entry's run" || bad "wrapper saw '$SEEN', moves $(runs $EC)"
+
 echo "== a wrapper that dies still says something"
 E4=$(offer four "will explode")
 HARNESS_ECHO_OUTCOME=failed ./harness/runner >/dev/null 2>&1
@@ -103,7 +139,7 @@ W7="$HARNESS_WORKSPACES/$(printf 'test:mark:task:seven' | tr -c 'a-zA-Z0-9._-' '
 mkdir -p "$W7/.harness"
 cat > "$HARNESS_STATE/declaring" <<'W'
 #!/usr/bin/env bash
-. /data/repos/docket/harness/lib.sh
+. "$ROOT/harness/lib.sh"
 REQ="$(cat)"; WS="$(printf '%s' "$REQ" | jq -r .workspace)"
 mkdir -p "$WS/.harness"
 printf '{"outcome":"declined","note":"not mine to do"}' > "$WS/.harness/outcome.json"
@@ -118,7 +154,7 @@ echo "== an assistant that cannot write files is still heard"
 E9=$(offer nine "will answer in prose only")
 cat > "$HARNESS_STATE/talker" <<'W'
 #!/usr/bin/env bash
-. /data/repos/docket/harness/lib.sh
+. "$ROOT/harness/lib.sh"
 REQ="$(cat)"
 # Never touches the filesystem. All it does is answer -- like a hosted assistant
 # with no disk the runner can see.

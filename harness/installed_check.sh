@@ -6,17 +6,21 @@
 # from here, a temporary HOME so it cannot find anybody else's credential, and a
 # ticket as its only input.
 #
+# Checks the checkout it lives in; `DOCKET_TEST_DATABASE_URL` and
+# `INSTALLED_CHECK_PORT` move it out of another checkout's way.
+#
 #   ./harness/installed_check.sh
 set -uo pipefail
-cd /data/repos/docket
-PROD="$(grep -oP '(?<=^DOCKET_DATABASE_URL=).*' .env)"
-export DOCKET_DATABASE_URL="${PROD%/*}/docket_test"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+PROD="$(grep -oP '(?<=^DOCKET_DATABASE_URL=).*' .env | tr -d "'\"")"
+export DOCKET_DATABASE_URL="${DOCKET_TEST_DATABASE_URL:-${PROD%/*}/docket_test}"
 [ "$DOCKET_DATABASE_URL" = "$PROD" ] && { echo "refusing"; exit 2; }
-export DOCKET_TOKEN=installed-check DOCKET_PORT=19008
+PORT="${INSTALLED_CHECK_PORT:-19008}"
+export DOCKET_TOKEN=installed-check DOCKET_PORT=$PORT
 export DOCKET_OWNER_PARTY="wild-life:person:cccccccc-0000-0000-0000-000000000003"
 uv run alembic upgrade head >/dev/null 2>&1
 uv run docket & SRV=$!; trap 'kill $SRV 2>/dev/null' EXIT
-D=http://127.0.0.1:19008
+D=http://127.0.0.1:$PORT
 for _ in $(seq 60); do curl -sf $D/health >/dev/null 2>&1 && break; sleep 0.25; done
 A="Authorization: Bearer $DOCKET_TOKEN"
 AGENT="wild-life:person:dddddddd-0000-0000-0000-000000000004"
@@ -44,6 +48,8 @@ grep -q "enrolled as" /tmp/installed.log && ok "enrolled from the ticket" || bad
 
 MV=$(curl -s $D/entries/$EID -H "$A" | jq -r '[.moves[].move]|join(",")')
 [ "$MV" = "offer,accept,update" ] && ok "accepted and reported ($MV)" || bad "moves: $MV"
+TR=$(curl -s $D/entries/$EID -H "$A" | jq -r '[.moves[1:][].trace_id]|unique|join(",")')
+[[ "$TR" =~ ^[0-9a-f]{32}$ ]] && ok "and said which run it was" || bad "traces: '$TR'"
 
 WS="$WSDIR/test-mark-task-newbox"
 [ -f "$WS/AGENTS.md" ] && ok "instructions written into the workspace" || bad "no AGENTS.md"

@@ -90,12 +90,32 @@ bearer() { printf 'Authorization: Bearer %s\n' "$1"; }
 ts() { date -Is; }
 log() { printf '%s %s\n' "$(ts)" "$*" >&2; }
 
+#: Which run this is, as W3C Trace Context. One trace per pass, so every move a
+#: pass makes -- and any question it opens -- shares a trace id, and the board
+#: can show them as one piece of work. One span id per entry handled, so moves
+#: on different entries stay distinguishable inside the run.
+#:
+#: Generated here, never inherited: the loop in `~/agent` lives for weeks, and a
+#: `TRACEPARENT` it happened to carry would put every pass into one trace
+#: forever. Flags `01` (sampled), so a collector that samples on the parent's
+#: decision keeps what docket records.
+HARNESS_TRACE_ID=""
+HARNESS_SPAN_ID=""
+hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
+new_run() { HARNESS_TRACE_ID="$(hex 16)"; HARNESS_SPAN_ID="$(hex 8)"; }
+new_span() { HARNESS_SPAN_ID="$(hex 8)"; }
+traceparent() {
+  [ -n "$HARNESS_TRACE_ID" ] && printf '00-%s-%s-01' "$HARNESS_TRACE_ID" "$HARNESS_SPAN_ID"
+}
+
 #: Every call carries the credential; nothing else identifies us. Resolved once
 #: per process, because enrolling twice would mint two credentials for one agent.
+#: And the run it belongs to, when there is one.
 DOCKET_KEY=""
 dk() {
   [ -z "$DOCKET_KEY" ] && DOCKET_KEY="$(docket_credential)"
-  curl -s -H @<(bearer "$DOCKET_KEY") \
+  local tp; tp="$(traceparent)"
+  curl -s -H @<(bearer "$DOCKET_KEY") ${tp:+-H "traceparent: $tp"} \
        -H 'Content-Type: application/json' "$@"
 }
 
@@ -358,6 +378,7 @@ mkdir -p "$HARNESS_STATE/logs" "$HARNESS_WORKSPACES" || exit 1
 exec 9>"$HARNESS_STATE/lock"
 flock -n 9 || { log "$NAME busy, skipping this tick"; exit 0; }
 
+new_run
 ME="$(dk "$DOCKET_URL/me" | jq -r '.party // empty')"
 if [ -z "$ME" ]; then
   # Never guess. An unreachable register is not an empty one, and doing the work
@@ -407,6 +428,7 @@ ask() {  # <entry-json> <question> -> question entry id
 while read -r entry; do
   [ -z "$entry" ] && continue
   eid="$(printf '%s' "$entry" | jq -r '.id')"
+  new_span  # same run, its own span: this entry's moves, and the wrapper's context
   subject="$(printf '%s' "$entry" | jq -r '.subject')"
   state="$(printf '%s' "$entry" | jq -r '.state')"
 
@@ -433,7 +455,11 @@ while read -r entry; do
   runlog="$HARNESS_STATE/logs/$(date +%Y%m%d-%H%M%S)-${eid:0:8}.log"
 
   log "$NAME -> $NAME wrapper for ${eid:0:8} ($state) in $ws"
-  out="$(printf '%s' "$request" | HARNESS_ROLE=wrapper "$HARNESS_WRAPPER" 2>>"$runlog")"
+  # The wrapper is handed the run as the OTel environment carrier, so an
+  # assistant that emits traces of its own (Claude Code, with telemetry on)
+  # files them under this entry. Context only: nothing about where to send them.
+  out="$(printf '%s' "$request" | TRACEPARENT="$(traceparent)" HARNESS_ROLE=wrapper \
+         "$HARNESS_WRAPPER" 2>>"$runlog")"
   rc=$?
   result="$(result_of "$out")"
   # A wrapper that died, or printed something that is not a result, still has to
