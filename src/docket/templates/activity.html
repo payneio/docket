@@ -1,14 +1,21 @@
 {% extends "base.html" %}
 {% block heading %}activity{% endblock %}
 {% block body %}
-<p class="terms">Every move, newest first. The per-entry log says how one
+<p class="terms">Every move, newest first, gathered into runs: the moves one
+party made together, in one pass or one turn. The per-entry log says how one
 conversation went; this says what happened today, which is the question you ask
 when several parties are working at once.</p>
 
 <h2>Lately <span>{{ moves | length }}</span></h2>
 {% if moves %}
 <table class="log">
-  {% for m, e in moves %}
+  {% for run in runs %}
+  {% if run.moves | length > 1 %}
+  <tr class="head"><td colspan="5">one run &middot; {{ run.moves | length }} moves
+    {%- if run.entries > 1 %} on {{ run.entries }} entries{% endif %}
+    {%- if trace_url %} &middot; <a href="{{ trace_url.replace('{trace_id}', run.trace_id) }}">trace</a>{% endif %}</td></tr>
+  {% endif %}
+  {% for m, e in run.moves %}
   <tr>
     <td>{{ m.at.strftime('%d %b %H:%M') }}</td>
     <td class="move">{{ m.move }}</td>
@@ -20,7 +27,12 @@ when several parties are working at once.</p>
     <td class="note">{{ (m.note or '') | truncate(90) }}</td>
   </tr>
   {% endfor %}
+  {% endfor %}
 </table>
 {% else %}<p class="empty">Nothing has happened yet.</p>{% endif %}
+
+<p class="note">A run is what the party that made the moves says it was: each
+request carries a W3C <code>traceparent</code>, and moves that share one are
+shown together. Like a note, it is the party's own account.</p>
 
 {% endblock %}

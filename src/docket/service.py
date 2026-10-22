@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docket import events, states
+from docket import events, states, tracing
 from docket.auth import Identity
 from docket.models.entries import Entry, Move
 from docket.schemas.entries import EntryRead, MoveCreate, OfferCreate
@@ -195,6 +195,7 @@ async def _record(
     """Write the move down. Returns it so the caller can stage a stream event
     once the entry is in its final shape — the id is assigned at flush, and the
     event must describe the entry as it ended up, not as it was mid-move."""
+    trace_id, span_id = tracing.current_ids()
     row = Move(
             entry_id=entry.id,
             seq=await _next_seq(session, entry.id),
@@ -208,6 +209,8 @@ async def _record(
             from_state=before,
             to_state=after,
             note=note,
+            trace_id=trace_id,
+            span_id=span_id,
     )
     session.add(row)
     return row
@@ -361,6 +364,65 @@ async def recent_moves(
             | (Entry.accountable == identity.party)
         )
     return [(m, e) for m, e in (await session.execute(stmt)).all()]
+
+
+@dataclass(frozen=True)
+class Run:
+    """Moves that were made together: one harness pass, one cos turn, one
+    request. A move whose caller sent no trace context is a run of one, because
+    nothing says what it was made alongside."""
+
+    trace_id: str | None
+    #: Newest first, like the listing it was cut from.
+    moves: list[tuple[Move, Entry]]
+
+    @property
+    def entries(self) -> int:
+        return len({e.id for _, e in self.moves})
+
+
+def runs(moves: list[tuple[Move, Entry]]) -> list[Run]:
+    """Group a listing by run, in the order each run last moved.
+
+    Grouped across the whole listing rather than only where moves sit together,
+    because two parties working at once interleave, and a run split in two by
+    somebody else's move is still one run.
+    """
+    grouped: dict[str, Run] = {}
+    out: list[Run] = []
+    for m, e in moves:
+        if m.trace_id is None:
+            out.append(Run(trace_id=None, moves=[(m, e)]))
+        elif m.trace_id in grouped:
+            grouped[m.trace_id].moves.append((m, e))
+        else:
+            grouped[m.trace_id] = Run(trace_id=m.trace_id, moves=[(m, e)])
+            out.append(grouped[m.trace_id])
+    return out
+
+
+async def same_run(
+    session: AsyncSession, entry: Entry, identity: Identity
+) -> dict[str, list[Entry]]:
+    """For each run that moved this entry, the other entries it moved.
+
+    This is the question the activity page could not answer: coder accepted
+    *and* opened a question *and* updated, all in one pass, and the three moves
+    sat on three pages with nothing joining them. Scoped like every other read:
+    an entry you may not see is not listed, even as a neighbour.
+    """
+    ids = {m.trace_id for m in entry.moves if m.trace_id}
+    if not ids:
+        return {}
+    stmt = scope(
+        select(Entry).join(Move, Move.entry_id == Entry.id)
+        .where(Move.trace_id.in_(ids), Entry.id != entry.id),
+        identity,
+    ).add_columns(Move.trace_id).distinct()
+    found: dict[str, list[Entry]] = {}
+    for other, trace_id in (await session.execute(stmt)).all():
+        found.setdefault(trace_id, []).append(other)
+    return found
 
 
 async def ended(session: AsyncSession, identity: Identity, limit: int = 12) -> list[Entry]:

@@ -11,6 +11,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from docket import mcp as mcp_module
+from docket import tracing
 from docket.config import settings
 from docket.routers import board, credentials, enrolments, entries, health, stream
 
@@ -19,6 +20,9 @@ app = FastAPI(
     description="A register of what is owed, by whom, to whom, and how it is going.",
     version="0.1.0",
 )
+# Which run a request belongs to, read from the caller's `traceparent` before
+# anything else sees the request. See ``docket.tracing``.
+app.add_middleware(tracing.TraceContext)
 app.include_router(health.router)
 app.include_router(entries.router)
 app.include_router(credentials.router)

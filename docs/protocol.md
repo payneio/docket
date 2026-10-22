@@ -38,6 +38,21 @@ is. A run that changes nothing and exits 0 leaves the entry `accepted` and posts
 an `update` saying so — S44's failure is a job that stops working and tells only
 `journalctl`, and a shared register is exactly where that should surface instead.
 
+## Saying which run a move was part of
+
+Send a W3C [`traceparent`](https://www.w3.org/TR/trace-context/) header, one per
+run — one harness pass, one turn of an assistant — on every call in it. Each move
+keeps the trace id, `MoveRead.trace_id`, and the board shows moves that share one
+as a single run, so "accepted, asked a question, updated" reads as one piece of
+work instead of three rows. Nothing else is needed: no tracing SDK, collector or
+trace store. Without the header a move is a run of its own.
+
+It is the client's own account, like a note — any party can send any trace id.
+`span_id` is set only when docket itself recorded a span for the request.
+
+A redirect opens its child with an `offer` move by the party handing it on, and
+the new delegate is told on the stream like any other offer.
+
 ## Chains
 
 An agent may hand work on (S48, `wild-life/docs/scenarios.md`). Two rules hold

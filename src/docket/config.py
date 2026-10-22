@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # The party that bearer token acts as. Every party is a URI (see refs.py).
     owner_party: str = "wild-life:person:00000000-0000-0000-0000-000000000000"
 
+    #: Where a trace can be read, with ``{trace_id}`` in it -- for example
+    #: ``https://jaeger.civil.payne.io/trace/{trace_id}``. Unset, the board links
+    #: nowhere. Shown to the owner only: a trace store does not apply this
+    #: register's per-party scoping, so a link into one is a way round it.
+    trace_url: str | None = None
+
     model_config = {"env_prefix": "DOCKET_", "env_file": ".env"}
 
     @property

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from docket import refs, service, states
 from docket.auth import SESSION_COOKIE, Identity, identify_token, resolve_identity
-from docket.config import TEMPLATES_DIR
+from docket.config import TEMPLATES_DIR, settings
 from docket.db.session import get_session
 from docket.models.credentials import ENROLMENT_PREFIX, Credential, digest, mint
 from docket.models.enrolments import Enrolment
@@ -277,15 +277,23 @@ def _by_age(entries: list[EntryRead]) -> list[EntryRead]:
     return sorted(entries, key=lambda e: e.stalled_for_seconds or 0, reverse=True)
 
 
+def _trace_url(identity: Identity) -> str | None:
+    """The trace-store link template, for the owner only. See ``Settings.trace_url``."""
+    return settings.trace_url if identity.is_operator else None
+
+
 @router.get("/board/activity", include_in_schema=False)
 async def activity(request: Request, session: AsyncSession = Depends(get_session)) -> Response:
     """What happened, across everything you can see."""
     identity = await _identity_or_none(request, session)
     if identity is None:
         return _sign_in(request)
+    moves = await service.recent_moves(session, identity)
     return templates.TemplateResponse(request, "activity.html", {
-        "moves": await service.recent_moves(session, identity),
+        "moves": moves,
+        "runs": service.runs(moves),
         "names": await _names(session, identity.party),
+        "trace_url": _trace_url(identity),
     })
 
 
@@ -309,6 +317,8 @@ async def entry_page(
         "entry": read,
         "names": await _names(session, identity.party),
         "error": error,
+        "same_run": await service.same_run(session, entry, identity),
+        "trace_url": _trace_url(identity),
     })
 
 

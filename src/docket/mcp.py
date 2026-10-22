@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.providers.openapi import MCPType, RouteMap
+from opentelemetry import propagate
 
 #: Everything that is not a move on the register or a question about it.
 #:
@@ -53,6 +54,11 @@ async def _forward_auth(request: httpx.Request) -> None:
     auth = get_http_headers(include={"authorization"}).get("authorization")
     if auth:
         request.headers["authorization"] = auth
+    # The run, too. FastMCP forwards the caller's own `traceparent` already, but
+    # the *current* context is the right parent: with nothing recording it is the
+    # caller's anyway, and with a tracing SDK installed it is the tool call's
+    # span, so the move nests under the tool that made it rather than beside it.
+    propagate.inject(request.headers)
 
 
 def build(app: FastAPI) -> FastMCP:

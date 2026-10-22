@@ -18,6 +18,9 @@ dependencies = [
     "python-multipart>=0.0.9",
     # The register, as tools. See src/docket/mcp.py.
     "fastmcp>=2.11",
+    # Which run a move was part of: the W3C propagator only. No SDK, no
+    # exporter -- see src/docket/tracing.py.
+    "opentelemetry-api>=1.30",
 ]
 
 [project.scripts]

@@ -124,6 +124,16 @@ class Move(Base, UUIDPrimaryKey):
     from_state: Mapped[str | None] = mapped_column(Text)
     to_state: Mapped[str] = mapped_column(Text, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
+    #: The W3C trace this move was made in, as 32 lowercase hex: which run of
+    #: which party it was part of. Every move the same harness pass, cos turn or
+    #: wild-life request made shares one. Asserted by the caller, like a note --
+    #: see ``docket.tracing`` -- and kept here rather than only in a trace store
+    #: because a trace store expires and the register does not.
+    trace_id: Mapped[str | None] = mapped_column(Text, index=True)
+    #: Docket's own server span for the request, 16 hex, and only when one was
+    #: being recorded. Null otherwise, never the caller's span: a stored span id
+    #: either resolves in the trace store or is absent.
+    span_id: Mapped[str | None] = mapped_column(Text)
 
     entry: Mapped[Entry] = relationship(back_populates="moves")
 

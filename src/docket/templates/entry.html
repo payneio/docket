@@ -41,6 +41,7 @@
 {% endif %}
 
 <h2>The log <span>{{ entry.moves | length }}</span></h2>
+{% set shown = [] %}
 <table class="log">
   {% for m in entry.moves %}
   <tr>
@@ -50,6 +51,14 @@
     <td>{% if m.recorded_by != m.by %}written down by {{ names[m.recorded_by] }}{% endif %}</td>
     <td class="note">{{ m.note or '' }}</td>
   </tr>
+  {% if m.trace_id and (same_run.get(m.trace_id) or trace_url) and m.trace_id not in shown %}
+  {% set _ = shown.append(m.trace_id) %}
+  <tr><td></td><td colspan="4" class="snap">same run:
+    {% for other in same_run.get(m.trace_id, []) -%}
+      <a href="/board/entries/{{ other.id }}">{{ other.subject_label or other.subject }}</a>{{ ", " if not loop.last }}
+    {%- else %}nothing else{% endfor %}
+    {%- if trace_url %} &middot; <a href="{{ trace_url.replace('{trace_id}', m.trace_id) }}">trace</a>{% endif %}</td></tr>
+  {% endif %}
   {% endfor %}
 </table>
 

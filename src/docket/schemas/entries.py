@@ -76,6 +76,8 @@ class MoveRead(BaseModel):
     from_state: str | None
     to_state: str
     note: str | None
+    trace_id: str | None = None
+    span_id: str | None = None
 
 
 class EntryRead(BaseModel):

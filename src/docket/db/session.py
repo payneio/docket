@@ -10,6 +10,11 @@ from docket.config import DB_SCHEMA, settings
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
+    # A statement that fails renders its bound values into the exception, and
+    # an exception is what gets recorded on a span or printed to a log. Those
+    # values are terms and notes -- what is owed and what was said about it --
+    # so the message names the statement and keeps the parameters out.
+    hide_parameters=True,
     connect_args={"server_settings": {"search_path": f"{DB_SCHEMA},public"}},
 )
 
