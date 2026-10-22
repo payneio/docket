@@ -55,6 +55,19 @@ open http://localhost:9006/          # the board; it asks for a token once
 
 `DOCKET_DATABASE_URL`, `DOCKET_TOKEN`, `DOCKET_OWNER_PARTY`.
 
+Every move keeps the W3C trace id its caller sent, with nothing else installed
+(`docs/protocol.md`). For docket's own spans as well, run it under the standard
+zero-code wrapper and configure it with the standard variables:
+
+```bash
+OTEL_SERVICE_NAME=docket OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=health,stream \
+  uv run --extra telemetry opentelemetry-instrument docket
+```
+
+`DOCKET_TRACE_URL` (e.g. `https://jaeger.example/trace/{trace_id}`) gives the
+owner a link from each run on the board.
+
 ## How a party gets in
 
 One way: a token. Nothing requires [fleetix](../fleetix), a unix account, or the

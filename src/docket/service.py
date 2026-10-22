@@ -213,6 +213,7 @@ async def _record(
             span_id=span_id,
     )
     session.add(row)
+    tracing.annotate(entry.id, move, identity.party, after)
     return row
 
 

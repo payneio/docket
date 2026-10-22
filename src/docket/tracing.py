@@ -69,3 +69,23 @@ def current_ids() -> tuple[str | None, str | None]:
         return None, None
     span_id = trace.format_span_id(ctx.span_id) if span.is_recording() else None
     return trace.format_trace_id(ctx.trace_id), span_id
+
+
+def annotate(entry_id: object, move: str, party: str, to_state: str) -> None:
+    """Say on docket's own span what this request did to the register.
+
+    Only when a span is being recorded; otherwise there is nowhere to say it.
+    An event per move rather than attributes on the span, because one request
+    can make two -- a redirect, and the offer that opens its child. Never the
+    terms or the note: what is owed and what was said stay in the register,
+    which scopes who may read them, and out of a trace store, which does not.
+    """
+    span = trace.get_current_span()
+    if not span.is_recording():
+        return
+    span.set_attribute("enduser.id", party)
+    span.add_event("docket.move", {
+        "docket.entry.id": str(entry_id),
+        "docket.move": move,
+        "docket.move.to_state": to_state,
+    })

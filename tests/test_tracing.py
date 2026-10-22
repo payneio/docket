@@ -143,3 +143,49 @@ def test_a_failed_statement_does_not_carry_its_parameters():
     """Bound values are terms and notes. An exception is what lands in a log or
     on a span, so it must name the statement and not repeat what was said."""
     assert engine.sync_engine.hide_parameters is True
+
+
+# --- with a tracing SDK installed -------------------------------------------
+#
+# Production runs docket under `opentelemetry-instrument`, whose server span is
+# current while a handler runs. A span opened around the request stands in for
+# it here: same contextvar, same rule.
+
+def _recording_tracer():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exported = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exported))
+    return provider.get_tracer("test"), exported
+
+
+async def test_a_recorded_span_is_the_one_stored(owner):
+    """With docket's own span being recorded, the move points at it -- so the
+    stored span id always resolves in the trace store."""
+    tracer, exported = _recording_tracer()
+    with tracer.start_as_current_span("server") as span:
+        e = await _offer(owner, headers=OTHER_RUN)  # the span outranks the header
+        ctx = span.get_span_context()
+    stored = e["moves"][0]
+    assert stored["trace_id"] == f"{ctx.trace_id:032x}"
+    assert stored["span_id"] == f"{ctx.span_id:016x}"
+
+    (finished,) = exported.get_finished_spans()
+    assert finished.attributes is not None
+    assert finished.attributes["enduser.id"] == settings.owner_party
+    (event,) = [ev for ev in finished.events if ev.name == "docket.move"]
+    assert event.attributes is not None
+    assert event.attributes["docket.move"] == "offer"
+    assert event.attributes["docket.entry.id"] == e["id"]
+
+
+async def test_a_span_never_carries_terms_or_notes(owner):
+    tracer, exported = _recording_tracer()
+    with tracer.start_as_current_span("server"):
+        await _offer(owner, terms="SECRET-TERMS", note="SECRET-NOTE")
+    (finished,) = exported.get_finished_spans()
+    said = repr(finished.attributes) + repr([ev.attributes for ev in finished.events])
+    assert "SECRET" not in said
