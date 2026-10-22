@@ -19,7 +19,7 @@ SUBJECT="$(printf '%s' "$REQ" | jq -r '.entry.subject')"
 TID="$(printf '%s' "$SUBJECT" | sed -n 's/^wild-life:task:\(.*\)$/\1/p')"
 [ -z "$TID" ] && exit 0   # not ours to judge
 
-STATUS="$(curl -s -H "Authorization: Bearer ${WILD_LIFE_TOKEN:-}" \
+STATUS="$(curl -s -H @<(printf 'Authorization: Bearer %s\n' "${WILD_LIFE_TOKEN:-}") \
           "$WILD_LIFE_API/tasks/$TID" | jq -r '.status // empty')"
 case "$STATUS" in
   completed) exit 0 ;;

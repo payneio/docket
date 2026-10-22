@@ -67,7 +67,7 @@ docket_enrol() {  # <ticket>
   local file out token
   file="${DOCKET_CREDENTIAL_FILE:-$HOME/.docket/credential}"
   if [ -s "$file" ]; then cat "$file"; return; fi
-  out="$(curl -s -X POST "$DOCKET_URL/enrol" -H "Authorization: Bearer $1" \
+  out="$(curl -s -X POST "$DOCKET_URL/enrol" -H @<(bearer "$1") \
          -H 'Content-Type: application/json' \
          -d "$(jq -nc --arg l "${HARNESS_LABEL:-$(hostname -s)}" '{label:$l}')")"
   token="$(printf '%s' "$out" | jq -r '.token // empty')"
@@ -81,6 +81,12 @@ docket_enrol() {  # <ticket>
   printf '%s' "$token"
 }
 
+#: An Authorization header, as a file for `curl -H @...`. Never as an argument:
+#: argv is world-readable in /proc, so a token passed with `-H "...$KEY"` can be
+#: read by every account on the box -- including the other principals the uid is
+#: meant to keep it from. `printf` is a builtin, so the token is in no argv at all.
+bearer() { printf 'Authorization: Bearer %s\n' "$1"; }
+
 ts() { date -Is; }
 log() { printf '%s %s\n' "$(ts)" "$*" >&2; }
 
@@ -89,7 +95,7 @@ log() { printf '%s %s\n' "$(ts)" "$*" >&2; }
 DOCKET_KEY=""
 dk() {
   [ -z "$DOCKET_KEY" ] && DOCKET_KEY="$(docket_credential)"
-  curl -s -H "Authorization: Bearer $DOCKET_KEY" \
+  curl -s -H @<(bearer "$DOCKET_KEY") \
        -H 'Content-Type: application/json' "$@"
 }
 
@@ -270,7 +276,7 @@ wait_for_work() {
   [ -z "$DOCKET_KEY" ] && DOCKET_KEY="$(docket_credential)"
 
   exec 3< <(curl -sN --max-time "$sweep" \
-              -H "Authorization: Bearer $DOCKET_KEY" \
+              -H @<(bearer "$DOCKET_KEY") \
               -H 'Accept: text/event-stream' "$DOCKET_URL/stream" 2>/dev/null)
   local pid=$!
 
