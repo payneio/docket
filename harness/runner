@@ -138,6 +138,25 @@ done < <(printf '%s' "$open" | jq -c '.[]
   | select((.whose_turn == "delegate" and (.is_blocked | not)) | not)')
 todo="$(jq -c -n --argjson t "$todo" --argjson r "$resumed" '$t + $r')"
 
+# Questions answered after the work they were for had already ended. There is
+# nothing left to take the answer back to, so the only thing left is to close
+# them: otherwise they sit at `delivered` with me on the hook to settle. Only
+# entries some work of mine was waiting on are questions; anything else I am
+# the requester of (work I handed on, say) is not mine to settle unread.
+ended="$(dk "$DOCKET_URL/entries?party=$(uri_escape "$ME")&open_only=false&limit=500" \
+  | jq -c '[.[] | select(.your_role == "delegate" and (.is_open | not) and .blocked_on != null)
+            | {key: .blocked_on, value: {id, state}}] | from_entries')"
+while read -r q; do
+  [ -z "$q" ] && continue
+  qid="$(printf '%s' "$q" | jq -r '.id')"
+  work="$(printf '%s' "$ended" | jq -r --arg q "$qid" '.[$q] | "\(.id[0:8]) \(.state)"')"
+  code="$(move "$qid" settle "answered after the work it was for ended ($work)")"
+  log "$NAME settled ${qid:0:8}: answered after $work ended ($code)"
+done < <(printf '%s' "$open" | jq -c --argjson ended "$ended" --argjson resumed "$resumed" '.[]
+  | select(.your_role == "requester" and .state == "delivered")
+  | select($ended[.id] != null)
+  | .id as $id | select([$resumed[].blocked_on] | index($id) | not)')
+
 count="$(printf '%s' "$todo" | jq 'length')"
 [ "$count" = "0" ] && { log "$NAME nothing to answer"; exit 0; }
 log "$NAME has $count to answer"

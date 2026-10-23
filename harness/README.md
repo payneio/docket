@@ -94,6 +94,10 @@ since it last spoke on the work, it
 
 `answer` is `{question, state, reply}`, and `default_prompt` puts it in front of
 the assistant. Once the work has moved again it is not resumed a second time.
+A question answered after its work had already ended (withdrawn, say) has
+nothing to go back to, so it is just settled. Only entries some work was
+`blocked_on` count as questions: work handed on and delivered back is never
+settled unread.
 
 ### `workspace`
 

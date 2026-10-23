@@ -258,6 +258,18 @@ HARNESS_WRAPPER="$HARNESS_STATE/reqdump" ./harness/runner >/dev/null 2>&1
 [ "$(moves $E3)" = "offer,accept,update,update" ] && [ "$(moves $E9)" = "offer,accept,update,update" ] \
   && ok "an answer already acted on is not acted on again" || bad "looped: $(moves $E3) / $(moves $E9)"
 
+echo "== a question answered after its work ended is still closed"
+EO=$(offer orphan "will be withdrawn while asking")
+HARNESS_ECHO_OUTCOME=blocked ./harness/runner >/dev/null 2>&1
+QO=$(question orphan)
+by_owner "$EO" '{"move":"withdraw","note":"not needed after all"}'
+by_owner "$QO" '{"move":"accept"}'
+by_owner "$QO" '{"move":"deliver","note":"Late answer."}'
+HARNESS_WRAPPER="$HARNESS_STATE/reqdump" ./harness/runner >/dev/null 2>&1
+[ "$(state $QO)" = "settled" ] && ok "settled by whoever asked it" || bad "question: $(state $QO)"
+[ "$(state $EO)" = "withdrawn" ] && [ ! -f "$HARNESS_STATE/requests/$EO.json" ] \
+  && ok "and the ended work was left ended" || bad "work: $(state $EO)"
+
 echo "== a ticket in DOCKET_API_KEY buys a credential"
 TICKET=$(curl -s -X POST $D/enrolments -H "$A" -H 'Content-Type: application/json' \
   -d "{\"party\":\"$AGENT\",\"label\":\"by ticket\"}" | jq -r .token)
