@@ -79,10 +79,6 @@ todo="$(printf '%s' "$open" | jq -c '[.[]
   | select(.is_blocked | not)
   | select(.state == "offered" or .state == "accepted")]')"
 
-count="$(printf '%s' "$todo" | jq 'length')"
-[ "$count" = "0" ] && { log "$NAME nothing to answer"; exit 0; }
-log "$NAME has $count to answer"
-
 move() {  # <entry-id> <move> [note] [extra-json]
   local extra body
   extra="${4:-}"; [ -z "$extra" ] && extra='{}'
@@ -90,6 +86,61 @@ move() {  # <entry-id> <move> [note] [extra-json]
           '{move:$m} + (if $n=="" then {} else {note:$n} end) + $x')"
   dk -o /dev/null -w '%{http_code}' -X POST "$DOCKET_URL/entries/$1/moves" -d "$body"
 }
+
+# Work held up by a question I asked, where the question has moved since I last
+# spoke on the work. The register cannot hand these back by itself: the last
+# move on the held entry is my own `update`, so by its rule it is the other
+# side's turn, and settling the question changes nothing about that. Left
+# alone, the answer arrives and nobody acts on it -- the question sits at
+# `delivered` and the work sits waiting on a reply it already has.
+#
+#   delivered            -> it is my question, so I settle it, and take the
+#                           answer back to the work.
+#   declined, withdrawn  -> no answer is coming; go back to the work and say so,
+#                           so the assistant can decide what that means.
+#   anything else        -> still being answered; keep waiting.
+resumed='[]'
+while read -r held; do
+  [ -z "$held" ] && continue
+  hid="$(printf '%s' "$held" | jq -r '.id')"
+  qid="$(printf '%s' "$held" | jq -r '.blocked_on')"
+  q="$(dk "$DOCKET_URL/entries/$qid")"
+  qstate="$(printf '%s' "$q" | jq -r '.state // empty')"
+  # Only if the question moved after I last did: otherwise this is an answer I
+  # have already been given, and resuming again would loop on it.
+  newer="$(jq -n --argjson h "$held" --argjson q "$q" \
+    '($q.moves | last | .at) > ($h.moves | last | .at)')"
+  [ "$newer" = "true" ] || continue
+  case "$qstate" in
+    delivered)
+      # Mine to settle only if I asked it. Work can wait on an entry somebody
+      # else opened; then the answer is still news, but closing it is theirs.
+      if [ "$(printf '%s' "$q" | jq -r '.requester')" = "$ME" ]; then
+        code="$(move "$qid" settle "answered; back to ${hid:0:8}")"
+        [ "$code" = "200" ] || { log "$NAME could not settle ${qid:0:8} ($code)"; continue; }
+        log "$NAME ${hid:0:8} answered; settled ${qid:0:8}"
+      else
+        log "$NAME ${hid:0:8} answered by ${qid:0:8}, which is not mine to settle"
+      fi ;;
+    declined|withdrawn)
+      log "$NAME ${hid:0:8} question ${qid:0:8} was $qstate" ;;
+    *) continue ;;
+  esac
+  answer="$(printf '%s' "$q" | jq -c --arg st "$qstate" '{
+    question: .terms, state: $st,
+    reply: ([.moves[] | select(.move != "settle") | .note // empty] | last)}')"
+  resumed="$(jq -c --argjson r "$resumed" --argjson h "$held" --argjson a "$answer" \
+    -n '$r + [$h + {answer: $a}]')"
+done < <(printf '%s' "$open" | jq -c '.[]
+  | select(.your_role == "delegate")
+  | select(.state == "offered" or .state == "accepted")
+  | select(.blocked_on != null)
+  | select((.whose_turn == "delegate" and (.is_blocked | not)) | not)')
+todo="$(jq -c -n --argjson t "$todo" --argjson r "$resumed" '$t + $r')"
+
+count="$(printf '%s' "$todo" | jq 'length')"
+[ "$count" = "0" ] && { log "$NAME nothing to answer"; exit 0; }
+log "$NAME has $count to answer"
 
 #: Ask the requester something, and record that we are waiting on the answer.
 #: A question is an entry in the other direction -- the same loop, and it stays

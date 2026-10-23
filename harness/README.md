@@ -80,6 +80,21 @@ The previous runner accepted everything it was offered and then ran, so a refusa
 was unexpressible — which is the failure `docs/protocol.md` describes. A wrapper
 that returns `declined` has declined; nothing was promised on its behalf.
 
+**An answer brings the work back.** A question is an entry the runner opened as
+requester, and the work it holds up was last moved by the runner itself — so by
+the register's turn rule both sit on the other side, and nothing in the register
+hands them back. The runner does: when a question it is waiting on has moved
+since it last spoke on the work, it
+
+| the question is | it does |
+|---|---|
+| `delivered` | `settle`s it (if it asked it), and runs the work again with `answer` in the request |
+| `declined`, `withdrawn` | runs the work again with `answer` saying no answer is coming |
+| anything else | keeps waiting |
+
+`answer` is `{question, state, reply}`, and `default_prompt` puts it in front of
+the assistant. Once the work has moved again it is not resumed a second time.
+
 ### `workspace`
 
 A directory belonging to the **subject**, not the entry. A subject that is

@@ -226,6 +226,38 @@ B9=$(curl -s $D/entries/$E9 -H "$A")
 Q9=$(curl -s "$D/entries?subject=test:mark:task:nine" -H "$A" | jq -r '[.[]|select(.delegate=="'"$DOCKET_OWNER_PARTY"'")]|first|.terms')
 [ "$Q9" = "Cursor or offset?" ] && ok "and the real question was asked, not the example" || bad "question: $Q9"
 
+echo "== an answered question is settled, and the work resumes with the answer"
+question(){ curl -s "$D/entries?subject=test:mark:task:$1&open_only=false" -H "$A" \
+  | jq -r '[.[]|select(.delegate=="'"$DOCKET_OWNER_PARTY"'")]|first|.id'; }
+by_owner(){ curl -s -o /dev/null -X POST "$D/entries/$1/moves" -H "$A" -H 'Content-Type: application/json' -d "$2"; }
+Q3=$(question three); Q9=$(question nine)
+by_owner "$Q3" '{"move":"accept"}'
+by_owner "$Q3" '{"move":"deliver","note":"Use the second approach."}'
+by_owner "$Q9" '{"move":"decline","note":"Not mine to decide."}'
+mkdir -p "$HARNESS_STATE/requests"
+cat > "$HARNESS_STATE/reqdump" <<'W'
+#!/usr/bin/env bash
+REQ="$(cat)"
+printf '%s' "$REQ" > "$HARNESS_STATE/requests/$(printf '%s' "$REQ" | jq -r .entry.id).json"
+jq -nc '{outcome:"progressed",note:"picked it back up"}'
+W
+chmod +x "$HARNESS_STATE/reqdump"
+HARNESS_WRAPPER="$HARNESS_STATE/reqdump" ./harness/runner >/dev/null 2>&1
+[ "$(state $Q3)" = "settled" ] && ok "the answered question was settled by whoever asked it" || bad "question: $(state $Q3)"
+[ "$(moves $E3)" = "offer,accept,update,update" ] && ok "the work it held up was taken up again" || bad "moves: $(moves $E3)"
+R3="$HARNESS_STATE/requests/$E3.json"
+[ "$(jq -r .answer.reply "$R3" 2>/dev/null)" = "Use the second approach." ] \
+  && ok "with the answer in the request" || bad "request: $(cat "$R3" 2>/dev/null)"
+( . "$ROOT/harness/lib.sh"; default_prompt "$(cat "$R3")" ) | grep -q "The answer: Use the second approach." \
+  && ok "and in the prompt every wrapper builds" || bad "prompt does not carry the answer"
+[ "$(state $Q9)" = "declined" ] && [ "$(moves $E9)" = "offer,accept,update,update" ] \
+  && ok "a declined question sends the work back too, and stays declined" || bad "E9: $(moves $E9), Q9: $(state $Q9)"
+[ "$(jq -r .answer.state "$HARNESS_STATE/requests/$E9.json" 2>/dev/null)" = "declined" ] \
+  && ok "told that no answer is coming" || bad "E9 request lacks the decline"
+HARNESS_WRAPPER="$HARNESS_STATE/reqdump" ./harness/runner >/dev/null 2>&1
+[ "$(moves $E3)" = "offer,accept,update,update" ] && [ "$(moves $E9)" = "offer,accept,update,update" ] \
+  && ok "an answer already acted on is not acted on again" || bad "looped: $(moves $E3) / $(moves $E9)"
+
 echo "== a ticket in DOCKET_API_KEY buys a credential"
 TICKET=$(curl -s -X POST $D/enrolments -H "$A" -H 'Content-Type: application/json' \
   -d "{\"party\":\"$AGENT\",\"label\":\"by ticket\"}" | jq -r .token)

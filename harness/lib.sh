@@ -173,7 +173,7 @@ execution_request() {  # <entry-json> <workspace> <me>
     moves: [$e.moves[] | {seq, at, by, move, note}],
     workspace: $ws,
     me: $me
-  }'
+  } + (if $e.answer then {answer: $e.answer} else {} end)'
 }
 
 #: A serviceable prompt built from the request, for wrappers with nothing better.
@@ -191,6 +191,13 @@ default_prompt() {  # <request-json>
         "The conversation so far:\n"
         + ([.moves[] | "  " + .move + (if .note then " — " + .note else "" end)] | join("\n"))
         + "\n\n" else "" end)
+    + (if .answer then
+        "You were waiting on an answer to: " + (.answer.question // "your question") + "\n"
+        + (if .answer.state == "delivered"
+           then "The answer: " + (.answer.reply // "(no note; read the conversation)") + "\n\n"
+           else "No answer is coming: the question was " + .answer.state
+                + (if .answer.reply then " — " + .answer.reply else "" end) + "\n\n" end)
+      else "" end)
     + "Do what you can now, in the working directory. Stop when you reach a\n"
     + "stable point rather than looping. If you need a decision from somebody,\n"
     + "say so plainly instead of guessing."'
