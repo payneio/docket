@@ -232,7 +232,7 @@ async def offer(session: AsyncSession, payload: OfferCreate, identity: Identity)
     """Ask someone to discharge something. The offer *is* the entry's creation."""
     if payload.delegate == identity.party:
         # Something you owe yourself is an intention, and intentions live in the
-        # system that authored them. `docs/plan.md` found 443 of 446 wild-life
+        # system that authored them. The split from wild-life found 443 of 446 wild-life
         # assignments were Paul to Paul, which is what this being expressible
         # costs: a register full of rows that say nothing about anybody.
         raise Rejected("a self-offer is not an offer; that is an intention, not an assignment")

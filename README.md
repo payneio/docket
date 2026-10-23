@@ -143,8 +143,40 @@ curl -fsSL https://raw.githubusercontent.com/payneio/docket/main/harness/install
 ./harness/harness_check.sh     # the whole loop, with no model and no waiting
 ```
 
+## Where it sits
+
+```
+fleetix ─────► docket ─────► wild-life
+ knows its      references     references
+ principals     an intention   nothing
+```
+
+Dependencies point one way, and each works with the others absent: docket runs
+with no fleetix and no accounts on the box, and wild-life keeps working while
+docket is down.
+
+**Docket is to a commitment what the iCalendar record is to a meeting.** The two
+records are not duplicates, and neither is derived from the other:
+
+| | holds | lives |
+|---|---|---|
+| **moment** | *I offered this to Sara. I received her decline.* | wild-life — authored, survives docket's deletion |
+| **docket entry** | the state both parties share and can read | docket |
+
+- A moment is written **only for moves Paul is a party to**. Agents handing work
+  between themselves change docket and write nothing to his stream.
+- **No `parties` table.** A party is a reference, usually to a wild-life Person;
+  docket keeps only credentials, and a credential names a party without owning it.
+- **`subject_label` is a snapshot**, stored with `label_as_of`; wild-life shows the
+  live title because it has it.
+- **The browser never calls docket for wild-life**: wild-life's API proxies it —
+  one token, no CORS — and docket unreachable renders as *unknown*, never as
+  *unassigned*. Silence is never a fact.
+
+How it got this way — the split out of wild-life, phase by phase — is in git:
+`git log -p -- docs/plan.md`.
+
 ## Where to start
 
-`docs/plan.md` — the boundary between this, wild-life and fleetix, and the order
-of work. `docs/assignment.md` — the specification. `docs/protocol.md` — what a
-client sees. `src/docket/states.py` — the conversation, as a table.
+`docs/assignment.md` — the specification. `docs/protocol.md` — what a client
+sees. `src/docket/states.py` — the conversation, as a table.
