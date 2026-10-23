@@ -109,8 +109,12 @@ strip_source() { grep -v '^\. "\$(cd .*lib\.sh"$' | grep -v '^# shellcheck sourc
   printf 'HARNESS_WRAPPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/%s"\n' "$NAME"
   printf 'export HARNESS_WRAPPER\n'
   src_runner | strip_source
-} > "$OUT"
-chmod +x "$OUT"
+} > "$OUT.new"
+# Renamed into place rather than written over. A runner that is mid-pass is a
+# bash process reading this very file as it goes; truncating it under that
+# process makes it execute whatever half of the new file it finds next. A
+# rename leaves it the file it started with, and the next pass gets this one.
+chmod +x "$OUT.new" && mv -f "$OUT.new" "$OUT"
 
 printf 'installed %s\n' "$OUT"
 
